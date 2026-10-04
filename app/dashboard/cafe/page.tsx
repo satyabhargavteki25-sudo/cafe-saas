@@ -1,17 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { onAuthStateChanged, User } from "firebase/auth";
+import Image from "next/image";
+import Link from "next/link";
+import { FormEvent, useEffect, useState } from "react";
 import {
   collection,
   getDocs,
+  limit,
   query,
   updateDoc,
   where,
 } from "firebase/firestore";
-import Link from "next/link";
-
-import { auth, db } from "../../../src/lib/firebase";
+import { onAuthStateChanged } from "firebase/auth";
+import { auth, db } from "@/src/lib/firebase";
+import { useRouter } from "next/navigation";
 
 type Cafe = {
   id: string;
@@ -20,8 +22,9 @@ type Cafe = {
   googleReviewUrl: string;
 };
 
-export default function CafePage() {
-  const [user, setUser] = useState<User | null>(null);
+export default function CafeSettingsPage() {
+  const router = useRouter();
+
   const [cafe, setCafe] = useState<Cafe | null>(null);
 
   const [name, setName] = useState("");
@@ -30,121 +33,58 @@ export default function CafePage() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [editing, setEditing] = useState(false);
 
+  const [editing, setEditing] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      if (!currentUser) {
-        window.location.href = "/login";
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (!user) {
+        router.replace("/login");
         return;
       }
 
-      setUser(currentUser);
-
       try {
-        const cafesQuery = query(
+        const cafeQuery = query(
           collection(db, "cafes"),
-          where("ownerId", "==", currentUser.uid)
+          where("ownerId", "==", user.uid),
+          limit(1)
         );
 
-        const snapshot = await getDocs(cafesQuery);
+        const snapshot = await getDocs(cafeQuery);
 
         if (snapshot.empty) {
-          setError("No cafe found for this account.");
-          setLoading(false);
+          router.replace("/onboarding");
           return;
         }
 
         const cafeDoc = snapshot.docs[0];
         const data = cafeDoc.data();
 
-        const cafeData: Cafe = {
+        const currentCafe: Cafe = {
           id: cafeDoc.id,
-          name: data.name || "",
-          whatsappNumber: data.whatsappNumber || "",
-          googleReviewUrl: data.googleReviewUrl || "",
+          name: data.name ?? "",
+          whatsappNumber: data.whatsappNumber ?? "",
+          googleReviewUrl: data.googleReviewUrl ?? "",
         };
 
-        setCafe(cafeData);
-
-        setName(cafeData.name);
-        setWhatsappNumber(cafeData.whatsappNumber);
-        setGoogleReviewUrl(cafeData.googleReviewUrl);
+        setCafe(currentCafe);
+        setName(currentCafe.name);
+        setWhatsappNumber(currentCafe.whatsappNumber);
+        setGoogleReviewUrl(currentCafe.googleReviewUrl);
       } catch (err) {
         console.error(err);
-        setError("Unable to load cafe information.");
+        setError("Unable to load your cafe information.");
+      } finally {
+        setLoading(false);
       }
-
-      setLoading(false);
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [router]);
 
-  const handleSave = async () => {
-    if (!cafe || !user) return;
-
-    setMessage("");
-    setError("");
-
-    if (!name.trim()) {
-      setError("Cafe name is required.");
-      return;
-    }
-
-    if (!whatsappNumber.trim()) {
-      setError("WhatsApp number is required.");
-      return;
-    }
-
-    if (!googleReviewUrl.trim()) {
-      setError("Google Review link is required.");
-      return;
-    }
-
-    if (
-      !googleReviewUrl.startsWith("http://") &&
-      !googleReviewUrl.startsWith("https://")
-    ) {
-      setError("Google Review link must start with http:// or https://");
-      return;
-    }
-
-    try {
-      setSaving(true);
-
-      await updateDoc(
-        // Firebase document reference
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (await import("firebase/firestore")).doc(db, "cafes", cafe.id),
-        {
-          name: name.trim(),
-          whatsappNumber: whatsappNumber.trim(),
-          googleReviewUrl: googleReviewUrl.trim(),
-        }
-      );
-
-      setCafe({
-        ...cafe,
-        name: name.trim(),
-        whatsappNumber: whatsappNumber.trim(),
-        googleReviewUrl: googleReviewUrl.trim(),
-      });
-
-      setEditing(false);
-      setMessage("Cafe details updated successfully.");
-    } catch (err) {
-      console.error(err);
-      setError("Unable to save changes. Please try again.");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleCancel = () => {
+  function handleCancel() {
     if (!cafe) return;
 
     setName(cafe.name);
@@ -152,313 +92,357 @@ export default function CafePage() {
     setGoogleReviewUrl(cafe.googleReviewUrl);
 
     setEditing(false);
-    setMessage("");
     setError("");
-  };
+    setMessage("");
+  }
+
+  async function handleSave(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    if (!cafe) return;
+
+    setError("");
+    setMessage("");
+
+    const trimmedName = name.trim();
+    const trimmedWhatsapp = whatsappNumber.trim();
+    const trimmedGoogleUrl = googleReviewUrl.trim();
+
+    if (trimmedName.length < 2) {
+      setError("Cafe name must contain at least 2 characters.");
+      return;
+    }
+
+    const whatsappDigits = trimmedWhatsapp.replace(/\D/g, "");
+
+    if (whatsappDigits.length < 10) {
+      setError("Please enter a valid WhatsApp number.");
+      return;
+    }
+
+    if (
+      !trimmedGoogleUrl.startsWith("http://") &&
+      !trimmedGoogleUrl.startsWith("https://")
+    ) {
+      setError("Please enter a valid Google Review link.");
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      const cafeRef = (
+        await import("firebase/firestore")
+      ).doc(db, "cafes", cafe.id);
+
+      await updateDoc(cafeRef, {
+        name: trimmedName,
+        whatsappNumber: trimmedWhatsapp,
+        googleReviewUrl: trimmedGoogleUrl,
+      });
+
+      const updatedCafe: Cafe = {
+        ...cafe,
+        name: trimmedName,
+        whatsappNumber: trimmedWhatsapp,
+        googleReviewUrl: trimmedGoogleUrl,
+      };
+
+      setCafe(updatedCafe);
+
+      setName(trimmedName);
+      setWhatsappNumber(trimmedWhatsapp);
+      setGoogleReviewUrl(trimmedGoogleUrl);
+
+      setEditing(false);
+      setMessage("Cafe information updated successfully.");
+    } catch (err) {
+      console.error(err);
+      setError("Unable to save your changes. Please try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#faf7f2] flex items-center justify-center">
+      <main className="flex min-h-screen items-center justify-center bg-slate-50">
         <div className="text-center">
-          <div className="text-5xl mb-4">☕</div>
+          <div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-orange-100 border-t-orange-500" />
 
-          <p className="text-[#6b5143] font-medium">
-            Loading cafe settings...
+          <p className="mt-4 text-sm font-medium text-slate-600">
+            Loading cafe...
           </p>
         </div>
-      </div>
+      </main>
     );
   }
 
+  if (!cafe) {
+    return null;
+  }
+
   return (
-    <div className="min-h-screen bg-[#faf7f2] text-[#2d211b]">
+    <main className="min-h-screen bg-slate-50 text-slate-900">
       {/* NAVBAR */}
-      <header className="sticky top-0 z-50 bg-white/95 backdrop-blur border-b border-[#eadfd5]">
-        <div className="max-w-6xl mx-auto px-5 sm:px-8">
-          <div className="h-20 flex items-center justify-between">
-            <Link href="/dashboard" className="flex items-center gap-3">
-              <div className="w-11 h-11 rounded-xl bg-[#4b2e20] flex items-center justify-center text-2xl">
-                ☕
-              </div>
+      <header className="border-b border-slate-200 bg-white">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4 lg:px-8">
+          <Link href="/dashboard" className="flex items-center gap-3">
+            <Image
+              src="/logo.jpeg"
+              alt="CafeFlow"
+              width={44}
+              height={44}
+              className="h-11 w-11 object-contain"
+              priority
+            />
 
-              <div>
-                <div className="text-xl font-bold text-[#3b2418]">
-                  CafeFlow
-                </div>
+            <span className="text-2xl font-bold tracking-tight">
+              <span className="text-slate-900">Cafe</span>
+              <span className="text-orange-500">Flow</span>
+            </span>
+          </Link>
 
-                <div className="text-xs text-[#8b7568]">
-                  Feedback management
-                </div>
-              </div>
-            </Link>
-
-            <div className="flex items-center gap-4">
-              <div className="hidden sm:block text-right">
-                <p className="text-sm font-semibold text-[#3b2418]">
-                  {user?.email}
-                </p>
-
-                <p className="text-xs text-[#8b7568]">
-                  Cafe Owner
-                </p>
-              </div>
-
-              <button
-                onClick={async () => {
-                  await auth.signOut();
-                  window.location.href = "/login";
-                }}
-                className="px-4 py-2 rounded-lg border border-[#dfd1c6] bg-white text-[#5a4032] text-sm font-semibold hover:bg-[#f7f0ea] transition"
-              >
-                Logout
-              </button>
-            </div>
-          </div>
+          <Link
+            href="/dashboard"
+            className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+          >
+            ← Dashboard
+          </Link>
         </div>
       </header>
 
-      {/* MAIN */}
-      <main className="max-w-6xl mx-auto px-5 sm:px-8 py-10">
-        {/* BREADCRUMB */}
-        <div className="mb-8">
-          <Link
-            href="/dashboard"
-            className="text-sm font-semibold text-[#8b5e3c] hover:text-[#5f3c29]"
-          >
-            ← Back to Dashboard
-          </Link>
-        </div>
-
-        {/* HEADER */}
-        <section className="mb-8">
-          <p className="text-sm font-bold tracking-[0.18em] text-[#9a6b4f] uppercase mb-3">
-            Cafe Settings
+      <div className="mx-auto max-w-4xl px-6 py-10 lg:px-8">
+        {/* PAGE HEADER */}
+        <div>
+          <p className="text-sm font-semibold text-orange-500">
+            Cafe Management
           </p>
 
-          <h1 className="text-3xl sm:text-4xl font-bold text-[#3b2418]">
+          <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-950">
             My Cafe
           </h1>
 
-          <p className="mt-3 text-[#756256]">
-            Manage the information customers see when they give feedback.
+          <p className="mt-2 max-w-2xl leading-7 text-slate-600">
+            Manage the information customers see when they scan your
+            CafeFlow QR code.
           </p>
-        </section>
+        </div>
 
-        {/* SUCCESS MESSAGE */}
+        {/* SUCCESS */}
         {message && (
-          <div className="mb-6 rounded-xl border border-green-200 bg-green-50 px-5 py-4 text-sm font-medium text-green-800">
-            ✅ {message}
+          <div className="mt-6 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-700">
+            {message}
           </div>
         )}
 
-        {/* ERROR MESSAGE */}
+        {/* ERROR */}
         {error && (
-          <div className="mb-6 rounded-xl border border-red-200 bg-red-50 px-5 py-4 text-sm font-medium text-red-800">
-            ⚠️ {error}
+          <div className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-600">
+            {error}
           </div>
         )}
 
-        {cafe && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* SETTINGS CARD */}
-            <section className="lg:col-span-2 bg-white border border-[#eadfd5] rounded-2xl shadow-sm">
-              <div className="p-7 border-b border-[#eee5df] flex items-center justify-between">
+        <div className="mt-8 grid gap-8 lg:grid-cols-3">
+          {/* SETTINGS */}
+          <section className="lg:col-span-2">
+            <div className="rounded-3xl border border-slate-200 bg-white p-7 shadow-sm sm:p-8">
+              <div className="flex items-start justify-between gap-4">
                 <div>
-                  <h2 className="text-xl font-bold text-[#3b2418]">
-                    Business Information
+                  <h2 className="text-xl font-bold text-slate-950">
+                    Cafe Information
                   </h2>
 
-                  <p className="text-sm text-[#8b7568] mt-1">
-                    Keep your cafe information up to date.
+                  <p className="mt-1 text-sm text-slate-500">
+                    These details are used throughout CafeFlow.
                   </p>
                 </div>
 
                 {!editing && (
                   <button
+                    type="button"
                     onClick={() => {
                       setEditing(true);
                       setMessage("");
                       setError("");
                     }}
-                    className="px-5 py-2.5 rounded-xl bg-[#4b2e20] text-white font-semibold hover:bg-[#382116] transition"
+                    className="rounded-xl bg-orange-500 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-orange-600"
                   >
                     Edit
                   </button>
                 )}
               </div>
 
-              <div className="p-7 space-y-6">
+              <form
+                onSubmit={handleSave}
+                className="mt-8 space-y-6"
+              >
                 {/* CAFE NAME */}
                 <div>
-                  <label className="block text-sm font-bold text-[#4b372d] mb-2">
+                  <label
+                    htmlFor="name"
+                    className="mb-2 block text-sm font-semibold text-slate-700"
+                  >
                     Cafe Name
                   </label>
 
-                  {editing ? (
-                    <input
-                      type="text"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      placeholder="ABC Cafe"
-                      className="w-full px-4 py-3 rounded-xl border border-[#d9c9bd] bg-white text-[#3b2418] outline-none focus:ring-2 focus:ring-[#b78967] focus:border-[#b78967]"
-                    />
-                  ) : (
-                    <div className="px-4 py-3 rounded-xl bg-[#faf7f2] border border-[#eee5df] text-[#3b2418] font-semibold">
-                      {cafe.name}
-                    </div>
-                  )}
+                  <input
+                    id="name"
+                    type="text"
+                    value={name}
+                    disabled={!editing}
+                    onChange={(e) => setName(e.target.value)}
+                    className={`w-full rounded-xl border px-4 py-3 text-slate-900 outline-none transition ${
+                      editing
+                        ? "border-slate-300 bg-white focus:border-orange-500 focus:ring-2 focus:ring-orange-100"
+                        : "border-slate-200 bg-slate-50"
+                    }`}
+                  />
                 </div>
 
                 {/* WHATSAPP */}
                 <div>
-                  <label className="block text-sm font-bold text-[#4b372d] mb-2">
+                  <label
+                    htmlFor="whatsapp"
+                    className="mb-2 block text-sm font-semibold text-slate-700"
+                  >
                     WhatsApp Number
                   </label>
 
-                  <p className="text-xs text-[#8b7568] mb-2">
-                    Include country code. Example: 918688856097
-                  </p>
+                  <input
+                    id="whatsapp"
+                    type="tel"
+                    value={whatsappNumber}
+                    disabled={!editing}
+                    onChange={(e) =>
+                      setWhatsappNumber(e.target.value)
+                    }
+                    placeholder="918688856097"
+                    className={`w-full rounded-xl border px-4 py-3 text-slate-900 outline-none transition ${
+                      editing
+                        ? "border-slate-300 bg-white focus:border-orange-500 focus:ring-2 focus:ring-orange-100"
+                        : "border-slate-200 bg-slate-50"
+                    }`}
+                  />
 
-                  {editing ? (
-                    <input
-                      type="text"
-                      value={whatsappNumber}
-                      onChange={(e) =>
-                        setWhatsappNumber(e.target.value)
-                      }
-                      placeholder="918688856097"
-                      className="w-full px-4 py-3 rounded-xl border border-[#d9c9bd] bg-white text-[#3b2418] outline-none focus:ring-2 focus:ring-[#b78967] focus:border-[#b78967]"
-                    />
-                  ) : (
-                    <div className="px-4 py-3 rounded-xl bg-[#faf7f2] border border-[#eee5df] text-[#3b2418] font-semibold">
-                      {cafe.whatsappNumber}
-                    </div>
-                  )}
+                  <p className="mt-2 text-xs text-slate-500">
+                    This number receives customer feedback through
+                    WhatsApp.
+                  </p>
                 </div>
 
                 {/* GOOGLE REVIEW */}
                 <div>
-                  <label className="block text-sm font-bold text-[#4b372d] mb-2">
+                  <label
+                    htmlFor="googleReview"
+                    className="mb-2 block text-sm font-semibold text-slate-700"
+                  >
                     Google Review Link
                   </label>
 
-                  <p className="text-xs text-[#8b7568] mb-2">
-                    Customers will use this link to leave an honest Google
-                    review.
-                  </p>
+                  <input
+                    id="googleReview"
+                    type="url"
+                    value={googleReviewUrl}
+                    disabled={!editing}
+                    onChange={(e) =>
+                      setGoogleReviewUrl(e.target.value)
+                    }
+                    placeholder="https://g.page/r/your-cafe/review"
+                    className={`w-full rounded-xl border px-4 py-3 text-slate-900 outline-none transition ${
+                      editing
+                        ? "border-slate-300 bg-white focus:border-orange-500 focus:ring-2 focus:ring-orange-100"
+                        : "border-slate-200 bg-slate-50"
+                    }`}
+                  />
 
-                  {editing ? (
-                    <input
-                      type="url"
-                      value={googleReviewUrl}
-                      onChange={(e) =>
-                        setGoogleReviewUrl(e.target.value)
-                      }
-                      placeholder="https://g.page/r/..."
-                      className="w-full px-4 py-3 rounded-xl border border-[#d9c9bd] bg-white text-[#3b2418] outline-none focus:ring-2 focus:ring-[#b78967] focus:border-[#b78967]"
-                    />
-                  ) : (
-                    <div className="px-4 py-3 rounded-xl bg-[#faf7f2] border border-[#eee5df] text-[#3b2418] break-all">
-                      {cafe.googleReviewUrl}
-                    </div>
-                  )}
+                  <p className="mt-2 text-xs leading-5 text-slate-500">
+                    Customers can choose to leave an honest review
+                    on Google.
+                  </p>
                 </div>
 
                 {/* BUTTONS */}
                 {editing && (
-                  <div className="pt-3 flex flex-col sm:flex-row gap-3">
+                  <div className="flex flex-col gap-3 pt-2 sm:flex-row">
                     <button
-                      onClick={handleSave}
+                      type="submit"
                       disabled={saving}
-                      className="px-6 py-3 rounded-xl bg-[#4b2e20] text-white font-bold hover:bg-[#382116] transition disabled:opacity-60"
+                      className="rounded-xl bg-orange-500 px-6 py-3 font-semibold text-white transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {saving ? "Saving..." : "Save Changes"}
                     </button>
 
                     <button
+                      type="button"
                       onClick={handleCancel}
                       disabled={saving}
-                      className="px-6 py-3 rounded-xl border border-[#d9c9bd] bg-white text-[#5a4032] font-bold hover:bg-[#f7f0ea] transition disabled:opacity-60"
+                      className="rounded-xl border border-slate-300 px-6 py-3 font-semibold text-slate-700 transition hover:bg-slate-50"
                     >
                       Cancel
                     </button>
                   </div>
                 )}
-              </div>
-            </section>
+              </form>
+            </div>
+          </section>
 
-            {/* PREVIEW CARD */}
-            <section className="bg-white border border-[#eadfd5] rounded-2xl shadow-sm h-fit">
-              <div className="p-7 border-b border-[#eee5df]">
-                <h2 className="text-xl font-bold text-[#3b2418]">
-                  Customer Preview
-                </h2>
+          {/* SIDE CARD */}
+          <aside className="space-y-5">
+            <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+              <p className="text-sm font-semibold text-slate-500">
+                Your Cafe
+              </p>
 
-                <p className="text-sm text-[#8b7568] mt-1">
-                  What your customer page represents.
-                </p>
-              </div>
-
-              <div className="p-7">
-                <div className="rounded-2xl bg-[#faf7f2] border border-[#eee5df] p-6 text-center">
-                  <div className="w-16 h-16 mx-auto rounded-2xl bg-[#4b2e20] flex items-center justify-center text-3xl">
-                    ☕
-                  </div>
-
-                  <h3 className="mt-4 text-xl font-bold text-[#3b2418]">
-                    {editing ? name || "Your Cafe" : cafe.name}
-                  </h3>
-
-                  <p className="mt-2 text-sm text-[#756256]">
-                    We&apos;d love to hear about your experience.
-                  </p>
-
-                  <div className="mt-5 flex justify-center gap-1 text-xl">
-                    ⭐ ⭐ ⭐ ⭐ ⭐
-                  </div>
+              <div className="mt-5 flex items-center gap-4">
+                <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-orange-50">
+                  <span className="text-2xl">☕</span>
                 </div>
 
-                <Link
-                  href={`/c/${cafe.id}`}
-                  target="_blank"
-                  className="mt-5 w-full inline-flex items-center justify-center px-5 py-3 rounded-xl bg-[#4b2e20] text-white font-bold hover:bg-[#382116] transition"
-                >
-                  Open Customer Page →
-                </Link>
+                <div className="min-w-0">
+                  <h3 className="truncate text-lg font-bold text-slate-950">
+                    {cafe.name}
+                  </h3>
+
+                  <p className="mt-1 text-xs text-slate-500">
+                    CafeFlow customer page
+                  </p>
+                </div>
               </div>
-            </section>
-          </div>
-        )}
 
-        {/* BOTTOM INFO */}
-        <section className="mt-8 bg-[#4b2e20] rounded-2xl px-7 py-8 text-white">
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-5">
-            <div>
-              <p className="text-xs font-bold tracking-[0.18em] uppercase text-[#e8cdb9]">
-                Your Cafe ID
-              </p>
-
-              <p className="mt-2 font-mono text-sm text-white break-all">
-                {cafe?.id}
-              </p>
+              <Link
+                href={`/c/${cafe.id}`}
+                target="_blank"
+                className="mt-6 block rounded-xl border border-slate-300 px-4 py-3 text-center text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Preview Customer Page
+              </Link>
             </div>
 
-            <Link
-              href="/dashboard/qr"
-              className="inline-flex items-center justify-center px-6 py-3 rounded-xl bg-white text-[#4b2e20] font-bold hover:bg-[#f7eee8] transition"
-            >
-              📱 Get QR Code
-            </Link>
-          </div>
-        </section>
-      </main>
+            <div className="rounded-3xl border border-orange-100 bg-orange-50 p-6">
+              <p className="text-sm font-semibold text-orange-600">
+                QR Code
+              </p>
 
-      {/* FOOTER */}
-      <footer className="max-w-6xl mx-auto px-5 sm:px-8 py-8">
-        <div className="border-t border-[#eadfd5] pt-6 text-center text-sm text-[#8b7568]">
-          ☕ CafeFlow · Simple feedback management for cafes
+              <h3 className="mt-2 font-bold text-slate-950">
+                Ready to collect feedback?
+              </h3>
+
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                Download your permanent CafeFlow QR code and place
+                it where customers can easily scan it.
+              </p>
+
+              <Link
+                href="/dashboard/qr"
+                className="mt-5 block rounded-xl bg-orange-500 px-4 py-3 text-center text-sm font-semibold text-white transition hover:bg-orange-600"
+              >
+                Manage QR Code
+              </Link>
+            </div>
+          </aside>
         </div>
-      </footer>
-    </div>
+      </div>
+    </main>
   );
 }

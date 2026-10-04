@@ -1,250 +1,359 @@
 "use client";
 
+import Image from "next/image";
+import Link from "next/link";
 import { useEffect, useState } from "react";
-import { onAuthStateChanged, User } from "firebase/auth";
-import { collection, getDocs, query, where } from "firebase/firestore";
-import { QRCodeCanvas } from "qrcode.react";
-
+import { collection, getDocs, limit, query, where } from "firebase/firestore";
+import { onAuthStateChanged } from "firebase/auth";
 import { auth, db } from "@/src/lib/firebase";
+import { useRouter } from "next/navigation";
+import { QRCodeCanvas } from "qrcode.react";
 
 type Cafe = {
   id: string;
-  name?: string;
+  name: string;
 };
 
-export default function QRPage() {
-  const [user, setUser] = useState<User | null>(null);
+export default function QRCodePage() {
+  const router = useRouter();
+
   const [cafe, setCafe] = useState<Cafe | null>(null);
+  const [customerUrl, setCustomerUrl] = useState("");
+
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [downloading, setDownloading] = useState(false);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      if (!currentUser) {
-        setError("You are not logged in.");
-        setLoading(false);
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (!user) {
+        router.replace("/login");
         return;
       }
 
-      setUser(currentUser);
-
       try {
-        const cafesQuery = query(
+        const cafeQuery = query(
           collection(db, "cafes"),
-          where("ownerId", "==", currentUser.uid)
+          where("ownerId", "==", user.uid),
+          limit(1)
         );
 
-        const snapshot = await getDocs(cafesQuery);
+        const snapshot = await getDocs(cafeQuery);
 
         if (snapshot.empty) {
-          setError("No cafe is connected to this owner account.");
-          setLoading(false);
+          router.replace("/onboarding");
           return;
         }
 
         const cafeDoc = snapshot.docs[0];
+        const data = cafeDoc.data();
 
         setCafe({
           id: cafeDoc.id,
-          ...cafeDoc.data(),
+          name: data.name ?? "My Cafe",
         });
-      } catch (err) {
-        console.error("QR cafe loading error:", err);
-        setError("Failed to load cafe.");
-      }
 
-      setLoading(false);
+        if (typeof window !== "undefined") {
+          setCustomerUrl(
+            `${window.location.origin}/c/${cafeDoc.id}`
+          );
+        }
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setLoading(false);
+      }
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [router]);
 
-  const customerUrl =
-    typeof window !== "undefined" && cafe
-      ? `${window.location.origin}/c/${cafe.id}`
-      : "";
-
-  const downloadQR = () => {
+  function downloadQRCode() {
     const canvas = document.getElementById(
-      "cafe-qr-code"
+      "cafeflow-qr"
     ) as HTMLCanvasElement | null;
 
-    if (!canvas) {
-      return;
+    if (!canvas || !cafe) return;
+
+    setDownloading(true);
+
+    try {
+      const pngUrl = canvas.toDataURL("image/png");
+
+      const downloadLink = document.createElement("a");
+
+      downloadLink.href = pngUrl;
+      downloadLink.download = `${cafe.name
+        .replace(/[^a-z0-9]/gi, "-")
+        .toLowerCase()}-cafeflow-qr.png`;
+
+      document.body.appendChild(downloadLink);
+      downloadLink.click();
+      document.body.removeChild(downloadLink);
+    } finally {
+      setDownloading(false);
     }
+  }
 
-    const pngUrl = canvas
-      .toDataURL("image/png")
-      .replace("image/png", "image/octet-stream");
-
-    const downloadLink = document.createElement("a");
-
-    downloadLink.href = pngUrl;
-    downloadLink.download = `${cafe?.name || "cafe"}-qr-code.png`;
-
-    document.body.appendChild(downloadLink);
-    downloadLink.click();
-    document.body.removeChild(downloadLink);
-  };
-
-  const printQR = () => {
+  function printQRCode() {
     window.print();
-  };
+  }
 
   if (loading) {
     return (
-      <main className="min-h-screen bg-[#FFF8F0] flex items-center justify-center">
-        <p className="text-[#6F4E37] text-lg">
-          Loading QR code...
-        </p>
+      <main className="flex min-h-screen items-center justify-center bg-slate-50">
+        <div className="text-center">
+          <div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-orange-100 border-t-orange-500" />
+
+          <p className="mt-4 text-sm font-medium text-slate-600">
+            Loading QR code...
+          </p>
+        </div>
       </main>
     );
   }
 
-  return (
-    <main className="min-h-screen bg-[#FFF8F0]">
-      {/* Header */}
-      <header className="bg-[#3E2723] text-white px-6 py-5">
-        <div className="max-w-5xl mx-auto">
-          <p className="text-2xl font-bold">
-            ☕ CafeFlow
-          </p>
+  if (!cafe) {
+    return null;
+  }
 
-          <p className="text-sm text-[#E8D5C4]">
-            Customer QR code
-          </p>
+  return (
+    <main className="min-h-screen bg-slate-50 text-slate-900">
+      {/* NAVBAR */}
+      <header className="border-b border-slate-200 bg-white print:hidden">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4 lg:px-8">
+          <Link href="/dashboard" className="flex items-center gap-3">
+            <Image
+              src="/logo.jpeg"
+              alt="CafeFlow"
+              width={44}
+              height={44}
+              className="h-11 w-11 object-contain"
+              priority
+            />
+
+            <span className="text-2xl font-bold tracking-tight">
+              <span className="text-slate-900">Cafe</span>
+              <span className="text-orange-500">Flow</span>
+            </span>
+          </Link>
+
+          <Link
+            href="/dashboard"
+            className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+          >
+            ← Dashboard
+          </Link>
         </div>
       </header>
 
-      <div className="max-w-5xl mx-auto px-6 py-8">
+      <div className="mx-auto max-w-6xl px-6 py-10 lg:px-8">
+        {/* HEADER */}
+        <div className="print:hidden">
+          <p className="text-sm font-semibold text-orange-500">
+            QR Management
+          </p>
 
-        <a
-          href="/dashboard"
-          className="text-[#6F4E37] font-medium hover:underline"
-        >
-          ← Dashboard
-        </a>
-
-        <div className="mt-6">
-          <h1 className="text-3xl font-bold text-[#3E2723]">
-            Customer QR Code
+          <h1 className="mt-2 text-3xl font-bold tracking-tight text-slate-950">
+            Your Cafe QR Code
           </h1>
 
-          <p className="mt-2 text-gray-600">
-            Customers can scan this QR code to leave feedback.
+          <p className="mt-2 max-w-2xl leading-7 text-slate-600">
+            Customers can scan this QR code to open your feedback page.
           </p>
         </div>
 
-        {error && (
-          <div className="mt-6 rounded-xl border border-red-200 bg-red-50 p-5">
-            <p className="font-semibold text-red-700">
-              {error}
-            </p>
-
-            {user && (
-              <p className="mt-2 text-sm text-red-600">
-                Logged-in email: {user.email}
-              </p>
-            )}
-          </div>
-        )}
-
-        {cafe && (
-          <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-8">
-
-            {/* QR card */}
-            <div
-              id="qr-print-area"
-              className="bg-white rounded-2xl border border-[#E8D5C4] shadow-sm p-8 text-center"
-            >
-              <p className="text-4xl">
-                ☕
-              </p>
-
-              <h2 className="mt-3 text-2xl font-bold text-[#3E2723]">
+        {/* MAIN GRID */}
+        <div className="mt-8 grid gap-8 lg:grid-cols-[1fr_1.2fr]">
+          {/* QR CARD */}
+          <section
+            id="qr-print-area"
+            className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm"
+          >
+            <div className="text-center">
+              <p className="text-sm font-semibold text-orange-500">
                 {cafe.name}
+              </p>
+
+              <h2 className="mt-2 text-2xl font-bold text-slate-950">
+                Scan to Share Feedback
               </h2>
 
-              <p className="mt-2 text-gray-500">
-                Scan to share your feedback
+              <p className="mt-2 text-sm text-slate-500">
+                Point your phone camera at the QR code.
               </p>
+            </div>
 
-              <div className="mt-8 flex justify-center">
+            <div className="mt-8 flex justify-center">
+              <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
                 {customerUrl && (
                   <QRCodeCanvas
-                    id="cafe-qr-code"
+                    id="cafeflow-qr"
                     value={customerUrl}
-                    size={240}
-                    bgColor="#ffffff"
-                    fgColor="#3E2723"
+                    size={280}
                     level="H"
                     includeMargin
+                    imageSettings={{
+                      src: "/logo.jpeg",
+                      height: 44,
+                      width: 44,
+                      excavate: true,
+                    }}
                   />
                 )}
               </div>
+            </div>
 
-              <p className="mt-6 text-sm text-gray-500">
-                Scan this QR code with your phone camera.
+            <div className="mt-7 text-center">
+              <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
+                Customer Page
+              </p>
+
+              <p className="mt-2 break-all text-sm font-medium text-slate-600">
+                {customerUrl}
               </p>
             </div>
 
-            {/* Information card */}
-            <div className="space-y-5">
+            {/* PRINT VERSION */}
+            <div className="hidden print:block print:mt-8">
+              <p className="text-center text-sm text-slate-500">
+                Powered by CafeFlow
+              </p>
+            </div>
+          </section>
 
-              <div className="bg-white rounded-2xl border border-[#E8D5C4] shadow-sm p-6">
-                <p className="text-sm text-gray-500">
-                  Customer URL
-                </p>
+          {/* INFORMATION CARD */}
+          <section className="space-y-5 print:hidden">
+            {/* DOWNLOAD */}
+            <div className="rounded-3xl border border-slate-200 bg-white p-7 shadow-sm">
+              <h2 className="text-xl font-bold text-slate-950">
+                Use your QR anywhere
+              </h2>
 
-                <p className="mt-2 break-all font-mono text-sm text-[#6F4E37]">
-                  {customerUrl}
-                </p>
-              </div>
+              <p className="mt-2 text-sm leading-6 text-slate-500">
+                Download the QR image and place it on tables, counters,
+                receipts, takeaway bags, menus, or posters.
+              </p>
 
-              <div className="bg-white rounded-2xl border border-[#E8D5C4] shadow-sm p-6">
-                <h2 className="text-xl font-bold text-[#3E2723]">
-                  How to use it
-                </h2>
-
-                <ol className="mt-4 space-y-3 text-gray-600">
-                  <li>
-                    <strong>1.</strong> Download the QR code.
-                  </li>
-
-                  <li>
-                    <strong>2.</strong> Print it.
-                  </li>
-
-                  <li>
-                    <strong>3.</strong> Place it on tables or near the billing counter.
-                  </li>
-
-                  <li>
-                    <strong>4.</strong> Customers scan it and submit feedback.
-                  </li>
-                </ol>
-              </div>
-
-              <div className="flex flex-col sm:flex-row gap-3">
+              <div className="mt-6 grid gap-3 sm:grid-cols-2">
                 <button
                   type="button"
-                  onClick={downloadQR}
-                  className="flex-1 rounded-xl bg-[#6F4E37] py-3 font-semibold text-white hover:bg-[#5D4037]"
+                  onClick={downloadQRCode}
+                  disabled={downloading}
+                  className="rounded-xl bg-orange-500 px-5 py-3.5 font-semibold text-white transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  ⬇️ Download QR
+                  {downloading
+                    ? "Preparing..."
+                    : "Download QR"}
                 </button>
 
                 <button
                   type="button"
-                  onClick={printQR}
-                  className="flex-1 rounded-xl border border-[#6F4E37] py-3 font-semibold text-[#6F4E37] hover:bg-[#F5EADF]"
+                  onClick={printQRCode}
+                  className="rounded-xl border border-slate-300 px-5 py-3.5 font-semibold text-slate-700 transition hover:bg-slate-50"
                 >
-                  🖨️ Print QR
+                  Print QR
                 </button>
               </div>
             </div>
-          </div>
-        )}
+
+            {/* PERMANENT QR */}
+            <div className="rounded-3xl border border-green-200 bg-green-50 p-7">
+              <div className="flex items-start gap-4">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-xl shadow-sm">
+                  ✓
+                </div>
+
+                <div>
+                  <h2 className="font-bold text-slate-950">
+                    Your QR is permanent
+                  </h2>
+
+                  <p className="mt-2 text-sm leading-6 text-slate-600">
+                    You can change your WhatsApp number, Google Review
+                    link, or other cafe settings without changing this QR
+                    code.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* HOW IT WORKS */}
+            <div className="rounded-3xl border border-slate-200 bg-white p-7 shadow-sm">
+              <h2 className="text-xl font-bold text-slate-950">
+                How it works
+              </h2>
+
+              <div className="mt-6 space-y-5">
+                <div className="flex gap-4">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-orange-100 text-sm font-bold text-orange-600">
+                    1
+                  </div>
+
+                  <div>
+                    <h3 className="font-semibold text-slate-900">
+                      Customer scans
+                    </h3>
+
+                    <p className="mt-1 text-sm leading-6 text-slate-500">
+                      The customer scans the QR using their phone.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex gap-4">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-orange-100 text-sm font-bold text-orange-600">
+                    2
+                  </div>
+
+                  <div>
+                    <h3 className="font-semibold text-slate-900">
+                      Customer gives feedback
+                    </h3>
+
+                    <p className="mt-1 text-sm leading-6 text-slate-500">
+                      They select a rating and write their experience.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex gap-4">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-orange-100 text-sm font-bold text-orange-600">
+                    3
+                  </div>
+
+                  <div>
+                    <h3 className="font-semibold text-slate-900">
+                      Cafe receives it
+                    </h3>
+
+                    <p className="mt-1 text-sm leading-6 text-slate-500">
+                      The feedback appears in your CafeFlow dashboard.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* PREVIEW */}
+            <Link
+              href={`/c/${cafe.id}`}
+              target="_blank"
+              className="block rounded-3xl border border-orange-100 bg-orange-50 p-7 transition hover:border-orange-200"
+            >
+              <p className="text-sm font-semibold text-orange-600">
+                Preview
+              </p>
+
+              <h2 className="mt-2 text-xl font-bold text-slate-950">
+                See the customer page →
+              </h2>
+
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                Open exactly what customers will see after scanning your QR.
+              </p>
+            </Link>
+          </section>
+        </div>
       </div>
 
       <style jsx global>{`
@@ -253,20 +362,7 @@ export default function QRPage() {
             background: white !important;
           }
 
-          body * {
-            visibility: hidden;
-          }
-
-          #qr-print-area,
-          #qr-print-area * {
-            visibility: visible;
-          }
-
           #qr-print-area {
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 100%;
             border: none !important;
             box-shadow: none !important;
           }

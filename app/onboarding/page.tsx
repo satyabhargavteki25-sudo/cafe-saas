@@ -2,74 +2,76 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { FormEvent, useState } from "react";
-import { createUserWithEmailAndPassword } from "firebase/auth";
-import { doc, setDoc } from "firebase/firestore";
+import { FormEvent, useEffect, useState } from "react";
+import { addDoc, collection, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "@/src/lib/firebase";
 import { useRouter } from "next/navigation";
 
-export default function SignupPage() {
+export default function OnboardingPage() {
   const router = useRouter();
 
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
+  const [cafeName, setCafeName] = useState("");
+  const [whatsappNumber, setWhatsappNumber] = useState("");
+  const [googleReviewUrl, setGoogleReviewUrl] = useState("");
 
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  async function handleSignup(e: FormEvent<HTMLFormElement>) {
+  useEffect(() => {
+    if (!auth.currentUser) {
+      router.replace("/login");
+    }
+  }, [router]);
+
+  async function handleCreateCafe(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
     setError("");
 
-    if (password.length < 6) {
-      setError("Password must be at least 6 characters.");
+    const user = auth.currentUser;
+
+    if (!user) {
+      router.replace("/login");
       return;
     }
 
-    if (password !== confirmPassword) {
-      setError("Passwords do not match.");
+    const trimmedName = cafeName.trim();
+    const trimmedWhatsapp = whatsappNumber.trim();
+    const trimmedGoogleUrl = googleReviewUrl.trim();
+
+    if (trimmedName.length < 2) {
+      setError("Please enter your cafe name.");
+      return;
+    }
+
+    if (trimmedWhatsapp.length < 10) {
+      setError("Please enter a valid WhatsApp number.");
+      return;
+    }
+
+    if (
+      !trimmedGoogleUrl.startsWith("http://") &&
+      !trimmedGoogleUrl.startsWith("https://")
+    ) {
+      setError("Please enter a valid Google Review link.");
       return;
     }
 
     setLoading(true);
 
     try {
-      const userCredential = await createUserWithEmailAndPassword(
-        auth,
-        email.trim(),
-        password
-      );
-
-      const user = userCredential.user;
-
-      await setDoc(doc(db, "users", user.uid), {
-        email: user.email,
-        role: "owner",
-        createdAt: new Date(),
+      await addDoc(collection(db, "cafes"), {
+        name: trimmedName,
+        whatsappNumber: trimmedWhatsapp,
+        googleReviewUrl: trimmedGoogleUrl,
+        ownerId: user.uid,
+        createdAt: serverTimestamp(),
       });
 
       router.push("/dashboard");
-    } catch (err: unknown) {
+    } catch (err) {
       console.error(err);
-
-      const errorCode =
-        typeof err === "object" &&
-        err !== null &&
-        "code" in err
-          ? String((err as { code: string }).code)
-          : "";
-
-      if (errorCode === "auth/email-already-in-use") {
-        setError("This email is already registered. Please log in.");
-      } else if (errorCode === "auth/invalid-email") {
-        setError("Please enter a valid email address.");
-      } else if (errorCode === "auth/weak-password") {
-        setError("Password is too weak. Use at least 6 characters.");
-      } else {
-        setError("Unable to create your account. Please try again.");
-      }
+      setError("Unable to create your cafe. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -77,12 +79,7 @@ export default function SignupPage() {
 
   return (
     <main className="min-h-screen bg-slate-50">
-
-      {/* =========================
-          TOP NAVIGATION
-      ========================== */}
       <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-6 lg:px-8">
-
         <Link href="/" className="flex items-center gap-3">
           <Image
             src="/logo.jpeg"
@@ -98,157 +95,123 @@ export default function SignupPage() {
             <span className="text-orange-500">Flow</span>
           </span>
         </Link>
-
-        <Link
-          href="/login"
-          className="rounded-lg px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-white hover:text-orange-500"
-        >
-          Login
-        </Link>
-
       </div>
 
-      {/* =========================
-          SIGNUP AREA
-      ========================== */}
       <div className="flex min-h-[calc(100vh-100px)] items-center justify-center px-6 pb-12">
-
-        <div className="w-full max-w-md">
-
-          {/* SIGNUP CARD */}
+        <div className="w-full max-w-lg">
           <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm sm:p-10">
-
-            {/* LOGO */}
             <div className="mb-7 flex justify-center">
-              <div className="flex h-28 w-28 items-center justify-center rounded-[2rem] border border-orange-100 bg-orange-50 shadow-sm">
+              <div className="flex h-24 w-24 items-center justify-center rounded-[1.75rem] border border-orange-100 bg-orange-50">
                 <Image
                   src="/logo.jpeg"
                   alt="CafeFlow raccoon"
-                  width={120}
-                  height={120}
-                  className="h-24 w-24 object-contain"
+                  width={100}
+                  height={100}
+                  className="h-20 w-20 object-contain"
                 />
               </div>
             </div>
 
-            {/* HEADING */}
             <div className="text-center">
+              <div className="mb-3 inline-flex rounded-full border border-orange-200 bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-600">
+                Step 1 of 1
+              </div>
+
               <h1 className="text-3xl font-bold tracking-tight text-slate-950">
-                Create your account
+                Set up your cafe
               </h1>
 
               <p className="mt-2 text-sm leading-6 text-slate-600">
-                Start managing your cafe with CafeFlow.
+                Add your cafe details to start collecting customer feedback.
               </p>
             </div>
 
-            {/* ERROR */}
             {error && (
               <div className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm leading-5 text-red-600">
                 {error}
               </div>
             )}
 
-            {/* FORM */}
             <form
-              onSubmit={handleSignup}
+              onSubmit={handleCreateCafe}
               className="mt-8 space-y-5"
             >
-
-              {/* EMAIL */}
               <div>
                 <label
-                  htmlFor="email"
+                  htmlFor="cafeName"
                   className="mb-2 block text-sm font-semibold text-slate-700"
                 >
-                  Email
+                  Cafe Name
                 </label>
 
                 <input
-                  id="email"
-                  type="email"
+                  id="cafeName"
+                  type="text"
                   required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
-                  autoComplete="email"
+                  value={cafeName}
+                  onChange={(e) => setCafeName(e.target.value)}
+                  placeholder="e.g. ABC Cafe"
                   className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-orange-500 focus:ring-2 focus:ring-orange-100"
                 />
               </div>
 
-              {/* PASSWORD */}
               <div>
                 <label
-                  htmlFor="password"
+                  htmlFor="whatsappNumber"
                   className="mb-2 block text-sm font-semibold text-slate-700"
                 >
-                  Password
+                  WhatsApp Number
                 </label>
 
                 <input
-                  id="password"
-                  type="password"
+                  id="whatsappNumber"
+                  type="tel"
                   required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Create a password"
-                  autoComplete="new-password"
+                  value={whatsappNumber}
+                  onChange={(e) => setWhatsappNumber(e.target.value)}
+                  placeholder="e.g. 918688856097"
                   className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-orange-500 focus:ring-2 focus:ring-orange-100"
                 />
 
                 <p className="mt-2 text-xs text-slate-500">
-                  Use at least 6 characters.
+                  Include country code for best results.
                 </p>
               </div>
 
-              {/* CONFIRM PASSWORD */}
               <div>
                 <label
-                  htmlFor="confirmPassword"
+                  htmlFor="googleReviewUrl"
                   className="mb-2 block text-sm font-semibold text-slate-700"
                 >
-                  Confirm Password
+                  Google Review Link
                 </label>
 
                 <input
-                  id="confirmPassword"
-                  type="password"
+                  id="googleReviewUrl"
+                  type="url"
                   required
-                  value={confirmPassword}
-                  onChange={(e) =>
-                    setConfirmPassword(e.target.value)
-                  }
-                  placeholder="Re-enter your password"
-                  autoComplete="new-password"
+                  value={googleReviewUrl}
+                  onChange={(e) => setGoogleReviewUrl(e.target.value)}
+                  placeholder="https://g.page/r/your-cafe/review"
                   className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-orange-500 focus:ring-2 focus:ring-orange-100"
                 />
+
+                <p className="mt-2 text-xs leading-5 text-slate-500">
+                  Customers will use this link when they choose to leave an
+                  honest Google review.
+                </p>
               </div>
 
-              {/* SIGNUP BUTTON */}
               <button
                 type="submit"
                 disabled={loading}
                 className="w-full rounded-xl bg-orange-500 px-5 py-3.5 font-semibold text-white shadow-sm transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {loading ? "Creating account..." : "Create Account"}
+                {loading ? "Creating your cafe..." : "Create My Cafe"}
               </button>
-
             </form>
-
-            {/* LOGIN */}
-            <div className="mt-7 text-center text-sm text-slate-600">
-              Already have an account?{" "}
-              <Link
-                href="/login"
-                className="font-semibold text-orange-500 hover:text-orange-600"
-              >
-                Sign in
-              </Link>
-            </div>
-
           </div>
 
-          {/* BACK TO HOME */}
           <div className="mt-6 text-center">
             <Link
               href="/"
@@ -257,7 +220,6 @@ export default function SignupPage() {
               ← Back to CafeFlow
             </Link>
           </div>
-
         </div>
       </div>
     </main>

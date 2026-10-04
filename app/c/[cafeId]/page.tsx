@@ -1,9 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import Image from "next/image";
+import { FormEvent, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { doc, getDoc, addDoc, collection, serverTimestamp } from "firebase/firestore";
-
+import {
+  addDoc,
+  collection,
+  doc,
+  getDoc,
+  serverTimestamp,
+} from "firebase/firestore";
 import { db } from "@/src/lib/firebase";
 
 type Cafe = {
@@ -12,15 +18,17 @@ type Cafe = {
   googleReviewUrl: string;
 };
 
-export default function CustomerCafePage() {
+export default function CustomerFeedbackPage() {
   const params = useParams();
+
   const cafeId = params.cafeId as string;
 
   const [cafe, setCafe] = useState<Cafe | null>(null);
+  const [loadingCafe, setLoadingCafe] = useState(true);
+
   const [rating, setRating] = useState(0);
   const [message, setMessage] = useState("");
 
-  const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState("");
@@ -32,43 +40,72 @@ export default function CustomerCafePage() {
         const cafeSnapshot = await getDoc(cafeRef);
 
         if (!cafeSnapshot.exists()) {
-          setError("Cafe not found.");
-          setLoading(false);
+          setCafe(null);
           return;
         }
 
-        setCafe(cafeSnapshot.data() as Cafe);
+        const data = cafeSnapshot.data();
+
+        setCafe({
+          name: data.name ?? "Cafe",
+          whatsappNumber: data.whatsappNumber ?? "",
+          googleReviewUrl: data.googleReviewUrl ?? "",
+        });
       } catch (err) {
         console.error(err);
-        setError("Failed to load cafe.");
+        setCafe(null);
+      } finally {
+        setLoadingCafe(false);
       }
-
-      setLoading(false);
     }
 
-    loadCafe();
+    if (cafeId) {
+      loadCafe();
+    }
   }, [cafeId]);
 
-  const submitFeedback = async () => {
+  function normalizeWhatsAppNumber(number: string) {
+    let cleaned = number.replace(/\D/g, "");
+
+    if (cleaned.startsWith("0")) {
+      cleaned = cleaned.substring(1);
+    }
+
+    if (cleaned.length === 10) {
+      cleaned = `91${cleaned}`;
+    }
+
+    return cleaned;
+  }
+
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    setError("");
+
     if (rating === 0) {
       setError("Please select a rating.");
       return;
     }
 
     if (message.trim().length < 3) {
-      setError("Please enter some feedback.");
+      setError("Please enter at least a few words of feedback.");
+      return;
+    }
+
+    if (message.trim().length > 2000) {
+      setError("Feedback must be less than 2000 characters.");
       return;
     }
 
     if (!cafe) {
+      setError("Cafe information could not be loaded.");
       return;
     }
 
     setSubmitting(true);
-    setError("");
 
     try {
-      // Save feedback in Firebase
       await addDoc(collection(db, "feedback"), {
         cafeId,
         rating,
@@ -76,16 +113,11 @@ export default function CustomerCafePage() {
         createdAt: serverTimestamp(),
       });
 
-      // Prepare WhatsApp message
-      let whatsappNumber = cafe.whatsappNumber.replace(/\D/g, "");
+      setSubmitted(true);
 
-      if (whatsappNumber.startsWith("0")) {
-        whatsappNumber = whatsappNumber.substring(1);
-      }
-
-      if (whatsappNumber.length === 10) {
-        whatsappNumber = "91" + whatsappNumber;
-      }
+      const whatsappNumber = normalizeWhatsAppNumber(
+        cafe.whatsappNumber
+      );
 
       const whatsappMessage = `Hi ${cafe.name},
 
@@ -98,44 +130,31 @@ ${message.trim()}
 
 Thank you.`;
 
-      const whatsappUrl = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(
-        whatsappMessage
-      )}`;
+      if (whatsappNumber.length >= 10) {
+        const whatsappUrl =
+          `https://wa.me/${whatsappNumber}` +
+          `?text=${encodeURIComponent(whatsappMessage)}`;
 
-      setSubmitted(true);
-
-      // Open WhatsApp after saving feedback
-      window.location.href = whatsappUrl;
+        window.location.href = whatsappUrl;
+      }
     } catch (err) {
       console.error(err);
-      setError("Failed to submit feedback. Please try again.");
+      setError(
+        "Something went wrong while submitting your feedback. Please try again."
+      );
+    } finally {
+      setSubmitting(false);
     }
-
-    setSubmitting(false);
-  };
-
-  if (loading) {
-    return (
-      <main className="min-h-screen bg-[#FFF8F0] flex items-center justify-center">
-        <p className="text-[#6F4E37] text-lg">
-          Loading cafe...
-        </p>
-      </main>
-    );
   }
 
-  if (error && !cafe) {
+  if (loadingCafe) {
     return (
-      <main className="min-h-screen bg-[#FFF8F0] flex items-center justify-center px-6">
-        <div className="bg-white rounded-2xl shadow-sm border border-red-200 p-8 text-center max-w-md">
-          <p className="text-3xl">☕</p>
+      <main className="flex min-h-screen items-center justify-center bg-slate-50 px-6">
+        <div className="text-center">
+          <div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-orange-100 border-t-orange-500" />
 
-          <h1 className="mt-3 text-2xl font-bold text-[#3E2723]">
-            CafeFlow
-          </h1>
-
-          <p className="mt-3 text-red-600">
-            {error}
+          <p className="mt-4 text-sm font-medium text-slate-600">
+            Loading...
           </p>
         </div>
       </main>
@@ -143,121 +162,242 @@ Thank you.`;
   }
 
   if (!cafe) {
-    return null;
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-50 px-6">
+        <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+          <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-2xl bg-orange-50">
+            <Image
+              src="/logo.jpeg"
+              alt="CafeFlow"
+              width={70}
+              height={70}
+              className="h-16 w-16 object-contain"
+            />
+          </div>
+
+          <h1 className="mt-6 text-2xl font-bold text-slate-950">
+            Cafe not found
+          </h1>
+
+          <p className="mt-2 text-sm leading-6 text-slate-500">
+            This feedback page is no longer available.
+          </p>
+        </div>
+      </main>
+    );
+  }
+
+  if (submitted) {
+    return (
+      <main className="min-h-screen bg-slate-50 px-5 py-8 sm:px-6">
+        <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-lg items-center justify-center">
+          <div className="w-full rounded-3xl border border-slate-200 bg-white p-8 text-center shadow-sm sm:p-10">
+            {/* CafeFlow subtle branding */}
+            <div className="mb-7 flex justify-center">
+              <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-orange-50">
+                <Image
+                  src="/logo.jpeg"
+                  alt="CafeFlow"
+                  width={58}
+                  height={58}
+                  className="h-14 w-14 object-contain"
+                />
+              </div>
+            </div>
+
+            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-green-50 text-3xl">
+              ✓
+            </div>
+
+            <h1 className="mt-6 text-3xl font-bold tracking-tight text-slate-950">
+              Thank you!
+            </h1>
+
+            <p className="mt-3 leading-7 text-slate-600">
+              Your feedback has been received by{" "}
+              <span className="font-semibold text-slate-900">
+                {cafe.name}
+              </span>
+              .
+            </p>
+
+            {cafe.googleReviewUrl && (
+              <div className="mt-8 rounded-2xl border border-slate-200 bg-slate-50 p-6">
+                <h2 className="font-bold text-slate-900">
+                  Want to share your experience publicly?
+                </h2>
+
+                <p className="mt-2 text-sm leading-6 text-slate-500">
+                  If you would like, you can leave an honest review on Google.
+                </p>
+
+                <a
+                  href={cafe.googleReviewUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-5 inline-flex w-full items-center justify-center rounded-xl bg-orange-500 px-5 py-3.5 font-semibold text-white transition hover:bg-orange-600"
+                >
+                  ⭐ Leave an Honest Google Review
+                </a>
+              </div>
+            )}
+
+            <div className="mt-8 border-t border-slate-100 pt-6">
+              <p className="text-xs text-slate-400">
+                Powered by
+              </p>
+
+              <div className="mt-2 flex items-center justify-center gap-2">
+                <Image
+                  src="/logo.jpeg"
+                  alt="CafeFlow"
+                  width={28}
+                  height={28}
+                  className="h-7 w-7 object-contain"
+                />
+
+                <span className="text-sm font-bold">
+                  <span className="text-slate-700">Cafe</span>
+                  <span className="text-orange-500">Flow</span>
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    );
   }
 
   return (
-    <main className="min-h-screen bg-[#FFF8F0] px-5 py-10">
-      <div className="max-w-md mx-auto">
+    <main className="min-h-screen bg-slate-50 px-5 py-8 sm:px-6">
+      <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-lg items-center justify-center">
+        <div className="w-full">
+          {/* CUSTOMER CARD */}
+          <div className="rounded-3xl border border-slate-200 bg-white p-7 shadow-sm sm:p-9">
+            {/* CAFE BRANDING */}
+            <div className="text-center">
+              <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-2xl bg-orange-50">
+                <span className="text-3xl">☕</span>
+              </div>
 
-        {/* Header */}
-        <div className="text-center">
-          <p className="text-5xl">☕</p>
+              <h1 className="mt-6 text-3xl font-bold tracking-tight text-slate-950">
+                {cafe.name}
+              </h1>
 
-          <h1 className="mt-3 text-3xl font-bold text-[#3E2723]">
-            {cafe.name}
-          </h1>
-
-          <p className="mt-2 text-gray-600">
-            We value your feedback
-          </p>
-        </div>
-
-        {!submitted ? (
-          <div className="mt-8 bg-white rounded-2xl border border-[#E8D5C4] shadow-sm p-6">
-
-            {/* Rating */}
-            <h2 className="text-lg font-semibold text-[#3E2723]">
-              How was your experience?
-            </h2>
-
-            <div className="flex justify-center gap-2 mt-5">
-              {[1, 2, 3, 4, 5].map((star) => (
-                <button
-                  key={star}
-                  type="button"
-                  onClick={() => setRating(star)}
-                  className="text-4xl transition-transform hover:scale-110"
-                >
-                  {star <= rating ? "⭐" : "☆"}
-                </button>
-              ))}
-            </div>
-
-            <p className="text-center mt-2 text-sm text-gray-500">
-              {rating === 0
-                ? "Select a rating"
-                : `${rating} out of 5`}
-            </p>
-
-            {/* Message */}
-            <div className="mt-6">
-              <label className="block text-sm font-medium text-[#3E2723]">
-                Your feedback
-              </label>
-
-              <textarea
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                placeholder="Tell us about your experience..."
-                rows={5}
-                className="mt-2 w-full rounded-xl border border-[#D9C2AE] p-3 outline-none focus:ring-2 focus:ring-[#C68B59]"
-              />
-            </div>
-
-            {error && (
-              <p className="mt-4 text-sm text-red-600">
-                {error}
+              <p className="mt-2 text-sm leading-6 text-slate-500">
+                We&apos;d love to hear about your experience.
               </p>
-            )}
+            </div>
 
-            <button
-              type="button"
-              onClick={submitFeedback}
-              disabled={submitting}
-              className="mt-6 w-full rounded-xl bg-[#6F4E37] py-3 font-semibold text-white hover:bg-[#5D4037] disabled:opacity-50"
+            {/* RATING */}
+            <form
+              onSubmit={handleSubmit}
+              className="mt-9"
             >
-              {submitting ? "Submitting..." : "Submit Feedback"}
-            </button>
-          </div>
-        ) : (
-          /* Success screen */
-          <div className="mt-8 bg-white rounded-2xl border border-[#E8D5C4] shadow-sm p-7 text-center">
+              <div className="text-center">
+                <p className="text-sm font-semibold text-slate-700">
+                  How was your experience?
+                </p>
 
-            <p className="text-5xl">🎉</p>
+                <div className="mt-4 flex justify-center gap-2">
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <button
+                      key={star}
+                      type="button"
+                      onClick={() => setRating(star)}
+                      aria-label={`${star} star rating`}
+                      className="rounded-lg p-1 text-4xl transition hover:scale-110 focus:outline-none"
+                    >
+                      <span
+                        className={
+                          star <= rating
+                            ? "text-orange-400"
+                            : "text-slate-200"
+                        }
+                      >
+                        ★
+                      </span>
+                    </button>
+                  ))}
+                </div>
 
-            <h2 className="mt-4 text-2xl font-bold text-[#3E2723]">
-              Thank you!
-            </h2>
+                <p className="mt-2 min-h-5 text-sm font-medium text-orange-500">
+                  {rating === 1 && "We&apos;re sorry to hear that."}
+                  {rating === 2 && "We can do better."}
+                  {rating === 3 && "Thanks for your feedback."}
+                  {rating === 4 && "Glad you enjoyed it!"}
+                  {rating === 5 && "That&apos;s wonderful! ❤️"}
+                </p>
+              </div>
 
-            <p className="mt-3 text-gray-600">
-              Your feedback has been received.
-            </p>
+              {/* MESSAGE */}
+              <div className="mt-7">
+                <label
+                  htmlFor="message"
+                  className="mb-2 block text-sm font-semibold text-slate-700"
+                >
+                  Tell us more
+                </label>
 
-            <div className="mt-6 border-t border-[#E8D5C4] pt-6">
-              <p className="font-semibold text-[#3E2723]">
-                Want to share your experience publicly?
-              </p>
+                <textarea
+                  id="message"
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  rows={6}
+                  maxLength={2000}
+                  placeholder="What did you like? What could we improve?"
+                  className="w-full resize-none rounded-2xl border border-slate-300 bg-white px-4 py-3.5 text-sm leading-6 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-orange-500 focus:ring-2 focus:ring-orange-100"
+                />
 
-              <p className="mt-2 text-sm text-gray-500">
-                If you would like, you can leave an honest review on Google.
-              </p>
+                <div className="mt-2 flex justify-end">
+                  <span className="text-xs text-slate-400">
+                    {message.length}/2000
+                  </span>
+                </div>
+              </div>
 
-              <a
-                href={cafe.googleReviewUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="mt-5 block w-full rounded-xl bg-[#6F4E37] py-3 font-semibold text-white hover:bg-[#5D4037]"
+              {/* ERROR */}
+              {error && (
+                <div className="mt-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm leading-5 text-red-600">
+                  {error}
+                </div>
+              )}
+
+              {/* SUBMIT */}
+              <button
+                type="submit"
+                disabled={submitting}
+                className="mt-6 w-full rounded-xl bg-orange-500 px-5 py-3.5 font-semibold text-white shadow-sm transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                ⭐ Leave an Honest Google Review
-              </a>
-            </div>
-          </div>
-        )}
+                {submitting
+                  ? "Submitting..."
+                  : "Submit Feedback"}
+              </button>
 
-        <p className="text-center text-xs text-gray-400 mt-8">
-          Powered by CafeFlow
-        </p>
+              <p className="mt-4 text-center text-xs leading-5 text-slate-400">
+                Your feedback helps {cafe.name} improve.
+              </p>
+            </form>
+          </div>
+
+          {/* SUBTLE CAFEFLOW BRANDING */}
+          <div className="mt-6 flex items-center justify-center gap-2">
+            <Image
+              src="/logo.jpeg"
+              alt="CafeFlow"
+              width={24}
+              height={24}
+              className="h-6 w-6 object-contain"
+            />
+
+            <span className="text-xs font-medium text-slate-400">
+              Powered by{" "}
+              <span className="font-semibold text-slate-500">
+                CafeFlow
+              </span>
+            </span>
+          </div>
+        </div>
       </div>
     </main>
   );

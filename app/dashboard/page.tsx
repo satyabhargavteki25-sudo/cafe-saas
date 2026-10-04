@@ -1,31 +1,33 @@
+
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
-import { onAuthStateChanged, signOut, User } from "firebase/auth";
+import Image from "next/image";
+import { useEffect, useState } from "react";
 import {
   collection,
   getDocs,
+  limit,
   query,
   where,
 } from "firebase/firestore";
-
-import { auth, db } from "../../src/lib/firebase";
+import { onAuthStateChanged, User } from "firebase/auth";
+import { auth, db } from "@/src/lib/firebase";
 
 type Cafe = {
   id: string;
   name: string;
-  whatsappNumber?: string;
-  googleReviewUrl?: string;
+  whatsappNumber: string;
+  googleReviewUrl: string;
+  ownerId: string;
 };
 
 type Feedback = {
   id: string;
-  cafeId: string;
   rating: number;
   message: string;
   createdAt?: {
-    seconds?: number;
+    seconds: number;
   };
 };
 
@@ -33,7 +35,9 @@ export default function DashboardPage() {
   const [user, setUser] = useState<User | null>(null);
   const [cafe, setCafe] = useState<Cafe | null>(null);
   const [feedback, setFeedback] = useState<Feedback[]>([]);
+
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -45,462 +49,582 @@ export default function DashboardPage() {
       setUser(currentUser);
 
       try {
-        const cafesQuery = query(
+        // ==========================================
+        // GET OWNER'S CAFE
+        // ==========================================
+
+        const cafeQuery = query(
           collection(db, "cafes"),
-          where("ownerId", "==", currentUser.uid)
+          where("ownerId", "==", currentUser.uid),
+          limit(1)
         );
 
-        const cafeSnapshot = await getDocs(cafesQuery);
+        const cafeSnapshot = await getDocs(cafeQuery);
 
-        if (!cafeSnapshot.empty) {
-          const cafeDoc = cafeSnapshot.docs[0];
-
-          const cafeData: Cafe = {
-            id: cafeDoc.id,
-            ...(cafeDoc.data() as Omit<Cafe, "id">),
-          };
-
-          setCafe(cafeData);
-
-          const feedbackQuery = query(
-            collection(db, "feedback"),
-            where("cafeId", "==", cafeDoc.id)
-          );
-
-          const feedbackSnapshot = await getDocs(feedbackQuery);
-
-          const feedbackData: Feedback[] = feedbackSnapshot.docs.map(
-            (doc) => ({
-              id: doc.id,
-              ...(doc.data() as Omit<Feedback, "id">),
-            })
-          );
-
-          feedbackData.sort((a, b) => {
-            const aTime = a.createdAt?.seconds ?? 0;
-            const bTime = b.createdAt?.seconds ?? 0;
-            return bTime - aTime;
-          });
-
-          setFeedback(feedbackData);
+        if (cafeSnapshot.empty) {
+          setCafe(null);
+          setFeedback([]);
+          setLoading(false);
+          return;
         }
-      } catch (error) {
-        console.error("Dashboard loading error:", error);
-      }
 
-      setLoading(false);
+        const cafeDocument = cafeSnapshot.docs[0];
+        const cafeData = cafeDocument.data();
+
+        const currentCafe: Cafe = {
+          id: cafeDocument.id,
+          name: cafeData.name ?? "My Cafe",
+          whatsappNumber: cafeData.whatsappNumber ?? "",
+          googleReviewUrl: cafeData.googleReviewUrl ?? "",
+          ownerId: cafeData.ownerId ?? currentUser.uid,
+        };
+
+        setCafe(currentCafe);
+
+        // ==========================================
+        // GET FEEDBACK
+        // ==========================================
+        //
+        // IMPORTANT:
+        // We intentionally do NOT use orderBy()
+        // here. That avoids requiring a Firestore
+        // composite index for the MVP.
+        //
+
+        const feedbackQuery = query(
+          collection(db, "feedback"),
+          where("cafeId", "==", currentCafe.id),
+          limit(100)
+        );
+
+        const feedbackSnapshot = await getDocs(feedbackQuery);
+
+        const feedbackList: Feedback[] = feedbackSnapshot.docs.map(
+          (document) => {
+            const data = document.data();
+
+            return {
+              id: document.id,
+              rating:
+                typeof data.rating === "number"
+                  ? data.rating
+                  : 0,
+              message:
+                typeof data.message === "string"
+                  ? data.message
+                  : "",
+              createdAt: data.createdAt,
+            };
+          }
+        );
+
+        // Sort newest feedback first in JavaScript.
+        feedbackList.sort((a, b) => {
+          const aTime = a.createdAt?.seconds ?? 0;
+          const bTime = b.createdAt?.seconds ?? 0;
+
+          return bTime - aTime;
+        });
+
+        setFeedback(feedbackList);
+      } catch (err) {
+        console.error("Dashboard loading error:", err);
+        setError(
+          "Unable to load some dashboard data. Please refresh and try again."
+        );
+      } finally {
+        setLoading(false);
+      }
     });
 
     return () => unsubscribe();
   }, []);
 
-  const handleLogout = async () => {
-    await signOut(auth);
-    window.location.href = "/login";
-  };
+  // ==========================================
+  // CALCULATIONS
+  // ==========================================
 
   const totalFeedback = feedback.length;
 
   const averageRating =
     totalFeedback > 0
-      ? (
-          feedback.reduce((sum, item) => sum + Number(item.rating), 0) /
-          totalFeedback
-        ).toFixed(1)
-      : "0.0";
+      ? feedback.reduce((sum, item) => sum + item.rating, 0) /
+        totalFeedback
+      : 0;
 
-  const ratingCounts = {
-    5: feedback.filter((item) => Number(item.rating) === 5).length,
-    4: feedback.filter((item) => Number(item.rating) === 4).length,
-    3: feedback.filter((item) => Number(item.rating) === 3).length,
-    2: feedback.filter((item) => Number(item.rating) === 2).length,
-    1: feedback.filter((item) => Number(item.rating) === 1).length,
-  };
+  const ratingCounts = [5, 4, 3, 2, 1].map((rating) => ({
+    rating,
+    count: feedback.filter((item) => item.rating === rating).length,
+  }));
 
-  const getPercentage = (count: number) => {
-    if (totalFeedback === 0) return 0;
-    return Math.round((count / totalFeedback) * 100);
-  };
-
-  const formatDate = (seconds?: number) => {
-    if (!seconds) return "Recently";
-
-    return new Date(seconds * 1000).toLocaleDateString("en-IN", {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-    });
-  };
+  // ==========================================
+  // LOADING
+  // ==========================================
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#faf7f2] flex items-center justify-center">
+      <main className="flex min-h-screen items-center justify-center bg-slate-50">
         <div className="text-center">
-          <div className="text-5xl mb-4">☕</div>
-          <p className="text-[#6b5143] font-medium">
+          <div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-orange-100 border-t-orange-500" />
+
+          <p className="mt-4 text-sm font-medium text-slate-600">
             Loading your dashboard...
           </p>
         </div>
-      </div>
+      </main>
     );
   }
 
-  return (
-    <div className="min-h-screen bg-[#faf7f2] text-[#2d211b]">
-      {/* NAVBAR */}
-      <header className="sticky top-0 z-50 border-b border-[#eadfd5] bg-white/95 backdrop-blur">
-        <div className="max-w-7xl mx-auto px-5 sm:px-8">
-          <div className="h-20 flex items-center justify-between">
-            <Link href="/dashboard" className="flex items-center gap-3">
-              <div className="w-11 h-11 rounded-xl bg-[#4b2e20] flex items-center justify-center text-2xl shadow-sm">
-                ☕
-              </div>
+  if (!user) {
+    return null;
+  }
 
-              <div>
-                <div className="text-xl font-bold text-[#3b2418]">
-                  CafeFlow
-                </div>
+  // ==========================================
+  // NO CAFE
+  // ==========================================
 
-                <div className="text-xs text-[#8b7568]">
-                  Feedback management
-                </div>
-              </div>
+  if (!cafe) {
+    return (
+      <main className="min-h-screen bg-slate-50">
+        <header className="border-b border-slate-200 bg-white">
+          <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-5 lg:px-8">
+            <Link href="/" className="flex items-center gap-3">
+              <Image
+                src="/logo.jpeg"
+                alt="CafeFlow"
+                width={48}
+                height={48}
+                className="h-12 w-12 object-contain"
+              />
+
+              <span className="text-2xl font-bold tracking-tight">
+                <span className="text-slate-900">Cafe</span>
+                <span className="text-orange-500">Flow</span>
+              </span>
             </Link>
 
-            <div className="flex items-center gap-4">
-              <div className="hidden sm:block text-right">
-                <div className="text-sm font-semibold text-[#3b2418]">
-                  {user?.email}
-                </div>
+            <Link
+              href="/onboarding"
+              className="rounded-xl bg-orange-500 px-5 py-2.5 text-sm font-semibold text-white hover:bg-orange-600"
+            >
+              Set Up Cafe
+            </Link>
+          </div>
+        </header>
 
-                <div className="text-xs text-[#8b7568]">
-                  Cafe Owner
-                </div>
-              </div>
-
-              <button
-                onClick={handleLogout}
-                className="px-4 py-2 rounded-lg border border-[#dfd1c6] bg-white text-[#5a4032] text-sm font-semibold hover:bg-[#f7f0ea] transition"
-              >
-                Logout
-              </button>
+        <div className="flex min-h-[calc(100vh-90px)] items-center justify-center px-6">
+          <div className="w-full max-w-lg rounded-3xl border border-slate-200 bg-white p-10 text-center shadow-sm">
+            <div className="mx-auto flex h-24 w-24 items-center justify-center rounded-3xl bg-orange-50">
+              <Image
+                src="/logo.jpeg"
+                alt="CafeFlow"
+                width={90}
+                height={90}
+                className="h-20 w-20 object-contain"
+              />
             </div>
+
+            <h1 className="mt-7 text-3xl font-bold text-slate-950">
+              Let&apos;s set up your cafe
+            </h1>
+
+            <p className="mt-3 leading-7 text-slate-600">
+              Your account is ready. Add your cafe details to start using
+              CafeFlow.
+            </p>
+
+            <Link
+              href="/onboarding"
+              className="mt-8 inline-flex rounded-xl bg-orange-500 px-7 py-3.5 font-semibold text-white hover:bg-orange-600"
+            >
+              Set Up My Cafe
+            </Link>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  // ==========================================
+  // DASHBOARD
+  // ==========================================
+
+  return (
+    <main className="min-h-screen bg-slate-50 text-slate-900">
+      {/* NAVBAR */}
+      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4 lg:px-8">
+          <Link href="/" className="flex items-center gap-3">
+            <Image
+              src="/logo.jpeg"
+              alt="CafeFlow"
+              width={44}
+              height={44}
+              className="h-11 w-11 object-contain"
+              priority
+            />
+
+            <span className="text-2xl font-bold tracking-tight">
+              <span className="text-slate-900">Cafe</span>
+              <span className="text-orange-500">Flow</span>
+            </span>
+          </Link>
+
+          <div className="flex items-center gap-4">
+            <div className="hidden text-right sm:block">
+              <p className="text-sm font-semibold text-slate-800">
+                Cafe Owner
+              </p>
+
+              <p className="text-xs text-slate-500">
+                {user.email}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={async () => {
+                await auth.signOut();
+                window.location.href = "/login";
+              }}
+              className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+            >
+              Logout
+            </button>
           </div>
         </div>
       </header>
 
-      {/* MAIN */}
-      <main className="max-w-7xl mx-auto px-5 sm:px-8 py-10">
+      <div className="mx-auto max-w-7xl px-6 py-10 lg:px-8">
         {/* HERO */}
-        <section className="mb-10">
-          <p className="text-sm font-bold tracking-[0.18em] text-[#9a6b4f] uppercase mb-3">
-            Owner Dashboard
-          </p>
+        <section className="rounded-3xl bg-slate-950 p-8 text-white shadow-sm sm:p-10">
+          <div className="flex flex-col justify-between gap-8 lg:flex-row lg:items-center">
+            <div>
+              <p className="text-sm font-semibold text-orange-400">
+                CafeFlow Dashboard
+              </p>
 
-          <h1 className="text-3xl sm:text-4xl font-bold text-[#3b2418]">
-            Good to see you again 👋
-          </h1>
+              <h1 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">
+                Good to see you again.
+              </h1>
 
-          <p className="mt-3 text-[#756256] text-base">
-            Here&apos;s how your customers are feeling about{" "}
-            <span className="font-bold text-[#3b2418]">
-              {cafe?.name || "your cafe"}
-            </span>
-            .
-          </p>
-        </section>
+              <p className="mt-3 max-w-2xl leading-7 text-slate-300">
+                Manage your customer feedback, ratings, QR code, and cafe
+                settings from one place.
+              </p>
 
-        {/* QUICK ACTIONS */}
-        <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-10">
-          <Link
-            href="/dashboard/feedback"
-            className="group bg-white border border-[#eadfd5] rounded-2xl p-6 shadow-sm hover:shadow-md hover:-translate-y-0.5 transition"
-          >
-            <div className="w-12 h-12 rounded-xl bg-[#f4ebe4] flex items-center justify-center text-2xl mb-5">
-              💬
+              <div className="mt-6 inline-flex items-center rounded-full bg-white/10 px-4 py-2 text-sm font-semibold">
+                ☕ {cafe.name}
+              </div>
             </div>
 
-            <h2 className="font-bold text-lg text-[#3b2418]">
-              Feedback
-            </h2>
-
-            <p className="text-sm text-[#756256] mt-1">
-              View responses
-            </p>
-          </Link>
-
-          <Link
-            href="/dashboard/qr"
-            className="group bg-white border border-[#eadfd5] rounded-2xl p-6 shadow-sm hover:shadow-md hover:-translate-y-0.5 transition"
-          >
-            <div className="w-12 h-12 rounded-xl bg-[#f4ebe4] flex items-center justify-center text-2xl mb-5">
-              📱
-            </div>
-
-            <h2 className="font-bold text-lg text-[#3b2418]">
-              QR Code
-            </h2>
-
-            <p className="text-sm text-[#756256] mt-1">
-              Get customer QR
-            </p>
-          </Link>
-
-          <Link
-            href="/dashboard/cafe"
-            className="group bg-white border border-[#eadfd5] rounded-2xl p-6 shadow-sm hover:shadow-md hover:-translate-y-0.5 transition"
-          >
-            <div className="w-12 h-12 rounded-xl bg-[#f4ebe4] flex items-center justify-center text-2xl mb-5">
-              ☕
-            </div>
-
-            <h2 className="font-bold text-lg text-[#3b2418]">
-              My Cafe
-            </h2>
-
-            <p className="text-sm text-[#756256] mt-1">
-              Cafe settings
-            </p>
-          </Link>
-
-          {cafe && (
             <Link
               href={`/c/${cafe.id}`}
               target="_blank"
-              className="group bg-white border border-[#eadfd5] rounded-2xl p-6 shadow-sm hover:shadow-md hover:-translate-y-0.5 transition"
+              className="inline-flex items-center justify-center rounded-xl bg-orange-500 px-6 py-3.5 font-semibold text-white transition hover:bg-orange-600"
             >
-              <div className="w-12 h-12 rounded-xl bg-[#f4ebe4] flex items-center justify-center text-2xl mb-5">
-                🔗
-              </div>
+              Open Customer Page
+            </Link>
+          </div>
+        </section>
 
-              <h2 className="font-bold text-lg text-[#3b2418]">
-                Customer Page
-              </h2>
+        {/* ERROR */}
+        {error && (
+          <div className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+            {error}
+          </div>
+        )}
 
-              <p className="text-sm text-[#756256] mt-1">
-                Preview your page
+        {/* QUICK ACTIONS */}
+        <section className="mt-8">
+          <h2 className="text-xl font-bold text-slate-950">
+            Quick actions
+          </h2>
+
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Link
+              href="/dashboard/feedback"
+              className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:border-orange-200 hover:shadow-md"
+            >
+              <div className="text-2xl">💬</div>
+
+              <h3 className="mt-4 font-bold text-slate-900">
+                Feedback
+              </h3>
+
+              <p className="mt-1 text-sm leading-6 text-slate-500">
+                View customer feedback and ratings.
               </p>
             </Link>
-          )}
+
+            <Link
+              href="/dashboard/qr"
+              className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:border-orange-200 hover:shadow-md"
+            >
+              <div className="text-2xl">▦</div>
+
+              <h3 className="mt-4 font-bold text-slate-900">
+                QR Code
+              </h3>
+
+              <p className="mt-1 text-sm leading-6 text-slate-500">
+                Download or print your cafe QR code.
+              </p>
+            </Link>
+
+            <Link
+              href="/dashboard/cafe"
+              className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:border-orange-200 hover:shadow-md"
+            >
+              <div className="text-2xl">⚙️</div>
+
+              <h3 className="mt-4 font-bold text-slate-900">
+                My Cafe
+              </h3>
+
+              <p className="mt-1 text-sm leading-6 text-slate-500">
+                Update your cafe information.
+              </p>
+            </Link>
+
+            <Link
+              href={`/c/${cafe.id}`}
+              target="_blank"
+              className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:border-orange-200 hover:shadow-md"
+            >
+              <div className="text-2xl">👀</div>
+
+              <h3 className="mt-4 font-bold text-slate-900">
+                Customer Page
+              </h3>
+
+              <p className="mt-1 text-sm leading-6 text-slate-500">
+                See what your customers see.
+              </p>
+            </Link>
+          </div>
         </section>
 
         {/* STATS */}
-        <section className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-10">
-          {/* TOTAL FEEDBACK */}
-          <div className="bg-white border border-[#eadfd5] rounded-2xl p-7 shadow-sm">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-semibold text-[#756256]">
-                  Total Feedback
-                </p>
+        <section className="mt-8 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <p className="text-sm font-medium text-slate-500">
+              Total Feedback
+            </p>
 
-                <p className="mt-3 text-4xl font-bold text-[#3b2418]">
-                  {totalFeedback}
-                </p>
+            <p className="mt-3 text-4xl font-bold text-slate-950">
+              {totalFeedback}
+            </p>
 
-                <p className="mt-2 text-sm text-[#8b7568]">
-                  Customer responses
-                </p>
-              </div>
-
-              <div className="w-14 h-14 rounded-2xl bg-[#f4ebe4] flex items-center justify-center text-2xl">
-                💬
-              </div>
-            </div>
+            <p className="mt-2 text-sm text-slate-500">
+              Customer responses
+            </p>
           </div>
 
-          {/* AVERAGE */}
-          <div className="bg-white border border-[#eadfd5] rounded-2xl p-7 shadow-sm">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-semibold text-[#756256]">
-                  Average Rating
-                </p>
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <p className="text-sm font-medium text-slate-500">
+              Average Rating
+            </p>
 
-                <p className="mt-3 text-4xl font-bold text-[#3b2418]">
-                  {averageRating}
-                </p>
+            <div className="mt-3 flex items-center gap-3">
+              <span className="text-4xl font-bold text-slate-950">
+                {averageRating.toFixed(1)}
+              </span>
 
-                <p className="mt-2 text-sm text-[#8b7568]">
-                  Out of 5 stars
-                </p>
-              </div>
-
-              <div className="w-14 h-14 rounded-2xl bg-[#f4ebe4] flex items-center justify-center text-2xl">
-                ⭐
-              </div>
+              <span className="text-2xl text-orange-400">
+                ★
+              </span>
             </div>
+
+            <p className="mt-2 text-sm text-slate-500">
+              Based on customer feedback
+            </p>
           </div>
 
-          {/* CAFE */}
-          <div className="bg-white border border-[#eadfd5] rounded-2xl p-7 shadow-sm">
-            <div className="flex items-center justify-between">
-              <div className="min-w-0">
-                <p className="text-sm font-semibold text-[#756256]">
-                  Your Cafe
-                </p>
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <p className="text-sm font-medium text-slate-500">
+              Your Cafe
+            </p>
 
-                <p className="mt-3 text-2xl font-bold text-[#3b2418] truncate">
-                  {cafe?.name || "No cafe"}
-                </p>
+            <p className="mt-3 truncate text-2xl font-bold text-slate-950">
+              {cafe.name}
+            </p>
 
-                <p className="mt-2 text-sm text-[#8b7568]">
-                  CafeFlow business profile
-                </p>
-              </div>
-
-              <div className="w-14 h-14 rounded-2xl bg-[#f4ebe4] flex items-center justify-center text-2xl shrink-0 ml-4">
-                ☕
-              </div>
-            </div>
+            <p className="mt-2 text-sm text-slate-500">
+              CafeFlow is connected
+            </p>
           </div>
         </section>
 
-        {/* LOWER SECTION */}
-        <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* RATING OVERVIEW */}
-          <div className="bg-white border border-[#eadfd5] rounded-2xl p-7 shadow-sm">
-            <div className="flex items-center justify-between mb-7">
-              <div>
-                <h2 className="text-xl font-bold text-[#3b2418]">
-                  Rating Overview
-                </h2>
+        {/* RATING OVERVIEW */}
+        <section className="mt-8 rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-xl font-bold text-slate-950">
+                Rating Overview
+              </h2>
 
-                <p className="text-sm text-[#8b7568] mt-1">
-                  Customer satisfaction
-                </p>
-              </div>
-
-              <div className="text-2xl">⭐</div>
+              <p className="mt-1 text-sm text-slate-500">
+                Customer rating distribution.
+              </p>
             </div>
 
-            <div className="space-y-4">
-              {[5, 4, 3, 2, 1].map((rating) => {
-                const count =
-                  ratingCounts[rating as keyof typeof ratingCounts];
-
-                const percentage = getPercentage(count);
-
-                return (
-                  <div key={rating} className="flex items-center gap-3">
-                    <div className="w-10 text-sm font-semibold text-[#5f493d]">
-                      {rating} ⭐
-                    </div>
-
-                    <div className="flex-1 h-2.5 bg-[#eee5df] rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-[#9a6b4f] rounded-full transition-all"
-                        style={{
-                          width: `${percentage}%`,
-                        }}
-                      />
-                    </div>
-
-                    <div className="w-8 text-right text-sm font-semibold text-[#3b2418]">
-                      {count}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            <Link
+              href="/dashboard/feedback"
+              className="text-sm font-semibold text-orange-500 hover:text-orange-600"
+            >
+              View all →
+            </Link>
           </div>
 
-          {/* RECENT FEEDBACK */}
-          <div className="bg-white border border-[#eadfd5] rounded-2xl p-7 shadow-sm">
-            <div className="flex items-center justify-between mb-7">
-              <div>
-                <h2 className="text-xl font-bold text-[#3b2418]">
-                  Recent Feedback
-                </h2>
+          <div className="mt-7 space-y-4">
+            {ratingCounts.map((item) => {
+              const percentage =
+                totalFeedback > 0
+                  ? (item.count / totalFeedback) * 100
+                  : 0;
 
-                <p className="text-sm text-[#8b7568] mt-1">
-                  Latest customer responses
-                </p>
-              </div>
+              return (
+                <div
+                  key={item.rating}
+                  className="flex items-center gap-4"
+                >
+                  <div className="flex w-12 items-center gap-1 text-sm font-semibold text-slate-700">
+                    {item.rating}
+                    <span className="text-orange-400">★</span>
+                  </div>
 
-              <Link
-                href="/dashboard/feedback"
-                className="text-sm font-bold text-[#8b5e3c] hover:text-[#5f3c29]"
-              >
-                View all →
-              </Link>
+                  <div className="h-3 flex-1 overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className="h-full rounded-full bg-orange-500 transition-all"
+                      style={{
+                        width: `${percentage}%`,
+                      }}
+                    />
+                  </div>
+
+                  <span className="w-8 text-right text-sm font-medium text-slate-500">
+                    {item.count}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* RECENT FEEDBACK */}
+        <section className="mt-8 rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-xl font-bold text-slate-950">
+                Recent Feedback
+              </h2>
+
+              <p className="mt-1 text-sm text-slate-500">
+                Latest customer responses.
+              </p>
             </div>
 
-            {feedback.length === 0 ? (
-              <div className="py-10 text-center">
-                <div className="text-4xl mb-3">💬</div>
+            <Link
+              href="/dashboard/feedback"
+              className="text-sm font-semibold text-orange-500 hover:text-orange-600"
+            >
+              View all →
+            </Link>
+          </div>
 
-                <p className="font-semibold text-[#3b2418]">
-                  No feedback yet
-                </p>
+          {feedback.length === 0 ? (
+            <div className="mt-7 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
+              <p className="font-semibold text-slate-700">
+                No feedback yet
+              </p>
 
-                <p className="text-sm text-[#8b7568] mt-1">
-                  Your first customer response will appear here.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {feedback.slice(0, 3).map((item) => (
-                  <div
-                    key={item.id}
-                    className="border border-[#eee5df] rounded-xl p-4 bg-[#fffdfb]"
-                  >
-                    <div className="flex items-center justify-between gap-4">
-                      <div className="text-sm tracking-wide">
-                        {"⭐".repeat(Number(item.rating))}
-                      </div>
-
-                      <span className="text-xs text-[#8b7568]">
-                        {formatDate(item.createdAt?.seconds)}
-                      </span>
+              <p className="mt-2 text-sm text-slate-500">
+                Share your QR code with customers to start collecting
+                feedback.
+              </p>
+            </div>
+          ) : (
+            <div className="mt-6 divide-y divide-slate-100">
+              {feedback.slice(0, 5).map((item) => (
+                <div
+                  key={item.id}
+                  className="py-5 first:pt-0 last:pb-0"
+                >
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex gap-1 text-orange-400">
+                      {[1, 2, 3, 4, 5].map((star) => (
+                        <span
+                          key={star}
+                          className={
+                            star <= item.rating
+                              ? "text-orange-400"
+                              : "text-slate-200"
+                          }
+                        >
+                          ★
+                        </span>
+                      ))}
                     </div>
 
-                    <p className="mt-3 text-sm leading-6 text-[#4d3b31]">
-                      {item.message}
-                    </p>
+                    <span className="text-xs text-slate-400">
+                      {item.createdAt
+                        ? new Date(
+                            item.createdAt.seconds * 1000
+                          ).toLocaleDateString()
+                        : "Recently"}
+                    </span>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
+
+                  <p className="mt-3 text-sm leading-6 text-slate-700">
+                    {item.message}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
         </section>
 
         {/* CTA */}
-        <section className="mt-8">
-          <div className="rounded-2xl bg-[#4b2e20] px-7 py-8 sm:px-10 sm:py-9 text-white shadow-sm">
-            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
-              <div>
-                <p className="text-xs font-bold tracking-[0.18em] uppercase text-[#e8cdb9]">
-                  Grow your feedback
-                </p>
+        <section className="mt-8 rounded-3xl border border-orange-100 bg-orange-50 p-8 sm:p-10">
+          <div className="flex flex-col justify-between gap-6 lg:flex-row lg:items-center">
+            <div>
+              <p className="text-sm font-semibold text-orange-600">
+                Grow your cafe
+              </p>
 
-                <h2 className="mt-2 text-2xl sm:text-3xl font-bold text-white">
-                  Put your feedback QR on every table.
-                </h2>
+              <h2 className="mt-2 text-2xl font-bold text-slate-950">
+                Put your CafeFlow QR where customers can see it.
+              </h2>
 
-                <p className="mt-2 text-sm sm:text-base text-[#eadbd2] max-w-2xl">
-                  Make it easy for customers to share their experience while
-                  it&apos;s still fresh.
-                </p>
-              </div>
-
-              <Link
-                href="/dashboard/qr"
-                className="inline-flex items-center justify-center px-6 py-3 rounded-xl bg-white text-[#4b2e20] font-bold hover:bg-[#f7eee8] transition shrink-0"
-              >
-                Get QR Code →
-              </Link>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+                Place it on tables, counters, bills, or takeaway packaging
+                and make feedback easy for your customers.
+              </p>
             </div>
+
+            <Link
+              href="/dashboard/qr"
+              className="inline-flex shrink-0 items-center justify-center rounded-xl bg-orange-500 px-6 py-3.5 font-semibold text-white transition hover:bg-orange-600"
+            >
+              Get QR Code
+            </Link>
           </div>
         </section>
-      </main>
+      </div>
 
       {/* FOOTER */}
-      <footer className="max-w-7xl mx-auto px-5 sm:px-8 py-8">
-        <div className="border-t border-[#eadfd5] pt-6 text-center text-sm text-[#8b7568]">
-          ☕ CafeFlow · Simple feedback management for cafes
+      <footer className="mt-12 border-t border-slate-200 bg-white">
+        <div className="mx-auto flex max-w-7xl flex-col gap-3 px-6 py-8 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between lg:px-8">
+          <p>
+            © {new Date().getFullYear()} CafeFlow. All rights reserved.
+          </p>
+
+          <p>
+            Customer feedback made simple.
+          </p>
         </div>
       </footer>
-    </div>
+    </main>
   );
 }
