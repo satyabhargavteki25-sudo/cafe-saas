@@ -1,591 +1,630 @@
 
 "use client";
 
+import Link from "next/link";
+import Image from "next/image";
 import { useEffect, useState } from "react";
-import type { ReactElement } from "react";
-import { QRCodeCanvas } from "qrcode.react";
-import { auth, db } from "@/src/lib/firebase";
 import {
   collection,
   getDocs,
+  limit,
   query,
   where,
 } from "firebase/firestore";
-import { useRouter } from "next/navigation";
+import { onAuthStateChanged, User } from "firebase/auth";
+import { auth, db } from "@/src/lib/firebase";
 
 type Cafe = {
   id: string;
   name: string;
+  whatsappNumber: string;
+  googleReviewUrl: string;
+  ownerId: string;
 };
 
-type QRType = "table" | "billing" | "menu";
-
-type QRCardProps = {
-  type: QRType;
-  title: string;
-  description: string;
-  icon: string;
-  url: string;
-  active: boolean;
+type Feedback = {
+  id: string;
+  rating: number;
+  message: string;
+  createdAt?: {
+    seconds: number;
+  };
 };
 
-function QRCard({
-  type,
-  title,
-  description,
-  icon,
-  url,
-  active,
-}: QRCardProps): ReactElement {
-  const canvasId = `qr-${type}`;
-
-  const handleDownload = (): void => {
-    const canvas = document.getElementById(
-      canvasId
-    ) as HTMLCanvasElement | null;
-
-    if (!canvas) {
-      return;
-    }
-
-    const downloadLink = document.createElement("a");
-    downloadLink.href = canvas.toDataURL("image/png");
-    downloadLink.download = `${type}-qr-code.png`;
-    document.body.appendChild(downloadLink);
-    downloadLink.click();
-    document.body.removeChild(downloadLink);
-  };
-
-  const handlePrint = (): void => {
-    const canvas = document.getElementById(
-      canvasId
-    ) as HTMLCanvasElement | null;
-
-    if (!canvas) {
-      return;
-    }
-
-    const imageData = canvas.toDataURL("image/png");
-    const printWindow = window.open("", "_blank");
-
-    if (!printWindow) {
-      alert("Please allow pop-ups to print the QR code.");
-      return;
-    }
-
-    printWindow.document.write(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>${title}</title>
-          <style>
-            * { box-sizing: border-box; }
-            body {
-              margin: 0;
-              padding: 32px;
-              font-family: Arial, sans-serif;
-              text-align: center;
-              background: white;
-              color: #111827;
-            }
-            .container {
-              max-width: 420px;
-              margin: 0 auto;
-            }
-            h1 {
-              font-size: 24px;
-              margin-bottom: 12px;
-            }
-            p {
-              color: #4b5563;
-              font-size: 14px;
-              line-height: 1.5;
-              margin: 0 0 20px;
-            }
-            img {
-              width: 260px;
-              height: 260px;
-              display: block;
-              margin: 0 auto;
-            }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <h1>${title}</h1>
-            <p>${description}</p>
-            <img src="${imageData}" alt="${title}" />
-          </div>
-        </body>
-      </html>
-    `);
-    printWindow.document.close();
-    printWindow.focus();
-    printWindow.print();
-  };
-
-  const handleCopyLink = async (): Promise<void> => {
-    try {
-      await navigator.clipboard.writeText(url);
-    } catch (error) {
-      console.error("Failed to copy QR link:", error);
-    }
-  };
-
-  return (
-    <div className="rounded-3xl border border-gray-200 bg-white p-5 shadow-sm ring-1 ring-gray-100">
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gray-100 text-xl">
-            {icon}
-          </div>
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500">
-              QR Code
-            </div>
-            <h3 className="mt-1 text-lg font-bold text-gray-900">
-              {title}
-            </h3>
-          </div>
-        </div>
-
-        <span
-          className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${
-            active
-              ? "bg-emerald-100 text-emerald-700"
-              : "bg-amber-100 text-amber-700"
-          }`}
-        >
-          {active ? "Active" : "Pending"}
-        </span>
-      </div>
-
-      <div className="mt-6 rounded-2xl border border-gray-200 bg-gray-50 p-4">
-        <div className="mx-auto flex w-full max-w-[220px] items-center justify-center rounded-2xl bg-white p-3 shadow-inner">
-          <QRCodeCanvas
-            id={canvasId}
-            value={url}
-            size={176}
-            bgColor="#ffffff"
-            fgColor="#111827"
-            level="M"
-            includeMargin={true}
-          />
-        </div>
-      </div>
-
-      <p className="mt-5 text-sm leading-6 text-gray-600">
-        {description}
-      </p>
-
-      <div className="mt-6 flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={handleCopyLink}
-          className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 transition hover:bg-gray-50"
-        >
-          Copy Link
-        </button>
-
-        <button
-          type="button"
-          onClick={handleDownload}
-          className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 transition hover:bg-gray-50"
-        >
-          Download
-        </button>
-
-        <button
-          type="button"
-          onClick={handlePrint}
-          className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 transition hover:bg-gray-50"
-        >
-          Print
-        </button>
-      </div>
-    </div>
-  );
-}
-
-export default function QRPage(): ReactElement | null {
-  const router = useRouter();
-
+export default function DashboardPage() {
+  const [user, setUser] = useState<User | null>(null);
   const [cafe, setCafe] = useState<Cafe | null>(null);
+  const [feedback, setFeedback] = useState<Feedback[]>([]);
+
   const [loading, setLoading] = useState(true);
-  const [customerUrl, setCustomerUrl] = useState("");
-  const [menuUrl, setMenuUrl] = useState("");
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    const loadCafe = async () => {
-      try {
-        const user = auth.currentUser;
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      if (!currentUser) {
+        window.location.href = "/login";
+        return;
+      }
 
-        if (!user) {
-          router.push("/login");
-          return;
-        }
+      setUser(currentUser);
+
+      try {
+        // ==========================================
+        // GET OWNER'S CAFE
+        // ==========================================
 
         const cafeQuery = query(
           collection(db, "cafes"),
-          where("ownerId", "==", user.uid)
+          where("ownerId", "==", currentUser.uid),
+          limit(1)
         );
 
-        const snapshot = await getDocs(cafeQuery);
+        const cafeSnapshot = await getDocs(cafeQuery);
 
-        if (snapshot.empty) {
-          router.push("/onboarding");
+        if (cafeSnapshot.empty) {
+          setCafe(null);
+          setFeedback([]);
+          setLoading(false);
           return;
         }
 
-        const cafeDoc = snapshot.docs[0];
+        const cafeDocument = cafeSnapshot.docs[0];
+        const cafeData = cafeDocument.data();
 
-        const cafeData: Cafe = {
-          id: cafeDoc.id,
-          name: cafeDoc.data().name || "My Cafe",
+        const currentCafe: Cafe = {
+          id: cafeDocument.id,
+          name: cafeData.name ?? "My Cafe",
+          whatsappNumber: cafeData.whatsappNumber ?? "",
+          googleReviewUrl: cafeData.googleReviewUrl ?? "",
+          ownerId: cafeData.ownerId ?? currentUser.uid,
         };
 
-        setCafe(cafeData);
+        setCafe(currentCafe);
 
-        const origin = window.location.origin;
+        // ==========================================
+        // GET FEEDBACK
+        // ==========================================
+        //
+        // IMPORTANT:
+        // We intentionally do NOT use orderBy()
+        // here. That avoids requiring a Firestore
+        // composite index for the MVP.
+        //
 
-        setCustomerUrl(`${origin}/c/${cafeData.id}`);
-        setMenuUrl(`${origin}/menu/${cafeData.id}`);
-      } catch (error) {
-        console.error("Error loading cafe:", error);
+        const feedbackQuery = query(
+          collection(db, "feedback"),
+          where("cafeId", "==", currentCafe.id),
+          limit(100)
+        );
+
+        const feedbackSnapshot = await getDocs(feedbackQuery);
+
+        const feedbackList: Feedback[] = feedbackSnapshot.docs.map(
+          (document) => {
+            const data = document.data();
+
+            return {
+              id: document.id,
+              rating:
+                typeof data.rating === "number"
+                  ? data.rating
+                  : 0,
+              message:
+                typeof data.message === "string"
+                  ? data.message
+                  : "",
+              createdAt: data.createdAt,
+            };
+          }
+        );
+
+        // Sort newest feedback first in JavaScript.
+        feedbackList.sort((a, b) => {
+          const aTime = a.createdAt?.seconds ?? 0;
+          const bTime = b.createdAt?.seconds ?? 0;
+
+          return bTime - aTime;
+        });
+
+        setFeedback(feedbackList);
+      } catch (err) {
+        console.error("Dashboard loading error:", err);
+        setError(
+          "Unable to load some dashboard data. Please refresh and try again."
+        );
       } finally {
         setLoading(false);
       }
-    };
+    });
 
-    loadCafe();
-  }, [router]);
+    return () => unsubscribe();
+  }, []);
 
-  const downloadQR = (
-    canvasId: string,
-    fileName: string
-  ): void => {
-    const canvas = document.getElementById(
-      canvasId
-    ) as HTMLCanvasElement | null;
+  // ==========================================
+  // CALCULATIONS
+  // ==========================================
 
-    if (!canvas) {
-      return;
-    }
+  const totalFeedback = feedback.length;
 
-    const pngUrl = canvas.toDataURL("image/png");
+  const averageRating =
+    totalFeedback > 0
+      ? feedback.reduce((sum, item) => sum + item.rating, 0) /
+        totalFeedback
+      : 0;
 
-    const downloadLink = document.createElement("a");
+  const ratingCounts = [5, 4, 3, 2, 1].map((rating) => ({
+    rating,
+    count: feedback.filter((item) => item.rating === rating).length,
+  }));
 
-    downloadLink.href = pngUrl;
-    downloadLink.download = fileName;
+  // ==========================================
+  // LOADING
+  // ==========================================
 
-    document.body.appendChild(downloadLink);
-    downloadLink.click();
-    document.body.removeChild(downloadLink);
-  };
-
-  const printQR = (
-    canvasId: string,
-    title: string,
-    description: string
-  ): void => {
-    const canvas = document.getElementById(
-      canvasId
-    ) as HTMLCanvasElement | null;
-
-    if (!canvas || !cafe) {
-      return;
-    }
-
-    const imageData = canvas.toDataURL("image/png");
-
-    const printWindow = window.open("", "_blank");
-
-    if (!printWindow) {
-      alert("Please allow pop-ups to print the QR code.");
-      return;
-    }
-
-    printWindow.document.write(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>${title} - ${cafe.name}</title>
-
-          <style>
-            * {
-              box-sizing: border-box;
-            }
-
-            body {
-              margin: 0;
-              padding: 40px;
-              font-family: Arial, sans-serif;
-              text-align: center;
-              background: white;
-              color: #111827;
-            }
-
-            .container {
-              max-width: 500px;
-              margin: 0 auto;
-            }
-
-            h1 {
-              font-size: 28px;
-              margin-bottom: 8px;
-            }
-
-            h2 {
-              font-size: 20px;
-              margin-bottom: 12px;
-            }
-
-            p {
-              color: #4b5563;
-              font-size: 15px;
-              line-height: 1.5;
-              margin-bottom: 25px;
-            }
-
-            img {
-              width: 320px;
-              height: 320px;
-            }
-
-            .footer {
-              margin-top: 25px;
-              font-size: 14px;
-              color: #6b7280;
-            }
-
-            @media print {
-              body {
-                padding: 20px;
-              }
-            }
-          </style>
-        </head>
-
-        <body>
-          <div class="container">
-
-            <h1>${cafe.name}</h1>
-
-            <h2>${title}</h2>
-
-            <p>${description}</p>
-
-            <img src="${imageData}" />
-
-            <div class="footer">
-              Scan the QR code with your phone
-            </div>
-
-          </div>
-
-          <script>
-            window.onload = function() {
-              window.print();
-            };
-          </script>
-        </body>
-      </html>
-    `);
-
-    printWindow.document.close();
-  };
-
-  /* Loading */
   if (loading) {
     return (
-      <main className="min-h-screen bg-gray-50">
-        <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
-          <div className="animate-pulse">
-            <div className="h-8 w-48 rounded bg-gray-200" />
+      <main className="flex min-h-screen items-center justify-center bg-slate-50">
+        <div className="text-center">
+          <div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-orange-100 border-t-orange-500" />
 
-            <div className="mt-3 h-4 w-80 rounded bg-gray-200" />
+          <p className="mt-4 text-sm font-medium text-slate-600">
+            Loading your dashboard...
+          </p>
+        </div>
+      </main>
+    );
+  }
 
-            <div className="mt-10 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-              <div className="h-[580px] rounded-3xl bg-gray-200" />
-              <div className="h-[580px] rounded-3xl bg-gray-200" />
-              <div className="h-[580px] rounded-3xl bg-gray-200" />
+  if (!user) {
+    return null;
+  }
+
+  // ==========================================
+  // NO CAFE
+  // ==========================================
+
+  if (!cafe) {
+    return (
+      <main className="min-h-screen bg-slate-50">
+        <header className="border-b border-slate-200 bg-white">
+          <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-5 lg:px-8">
+            <Link href="/" className="flex items-center gap-3">
+              <Image
+                src="/logo.jpeg"
+                alt="CafeFlow"
+                width={48}
+                height={48}
+                className="h-12 w-12 object-contain"
+              />
+
+              <span className="text-2xl font-bold tracking-tight">
+                <span className="text-slate-900">Cafe</span>
+                <span className="text-orange-500">Flow</span>
+              </span>
+            </Link>
+
+            <Link
+              href="/onboarding"
+              className="rounded-xl bg-orange-500 px-5 py-2.5 text-sm font-semibold text-white hover:bg-orange-600"
+            >
+              Set Up Cafe
+            </Link>
+          </div>
+        </header>
+
+        <div className="flex min-h-[calc(100vh-90px)] items-center justify-center px-6">
+          <div className="w-full max-w-lg rounded-3xl border border-slate-200 bg-white p-10 text-center shadow-sm">
+            <div className="mx-auto flex h-24 w-24 items-center justify-center rounded-3xl bg-orange-50">
+              <Image
+                src="/logo.jpeg"
+                alt="CafeFlow"
+                width={90}
+                height={90}
+                className="h-20 w-20 object-contain"
+              />
             </div>
+
+            <h1 className="mt-7 text-3xl font-bold text-slate-950">
+              Let&apos;s set up your cafe
+            </h1>
+
+            <p className="mt-3 leading-7 text-slate-600">
+              Your account is ready. Add your cafe details to start using
+              CafeFlow.
+            </p>
+
+            <Link
+              href="/onboarding"
+              className="mt-8 inline-flex rounded-xl bg-orange-500 px-7 py-3.5 font-semibold text-white hover:bg-orange-600"
+            >
+              Set Up My Cafe
+            </Link>
           </div>
         </div>
       </main>
     );
   }
 
-  if (!cafe) {
-    return null;
-  }
+  // ==========================================
+  // DASHBOARD
+  // ==========================================
 
   return (
-    <main className="min-h-screen bg-gray-50">
-      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
+    <main className="min-h-screen bg-slate-50 text-slate-900">
+      {/* NAVBAR */}
+      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4 lg:px-8">
+          <Link href="/" className="flex items-center gap-3">
+            <Image
+              src="/logo.jpeg"
+              alt="CafeFlow"
+              width={44}
+              height={44}
+              className="h-11 w-11 object-contain"
+              priority
+            />
 
-        {/* Back */}
-        <button
-          type="button"
-          onClick={() => router.push("/dashboard")}
-          className="mb-6 text-sm font-medium text-gray-500 transition hover:text-gray-900"
-        >
-          ← Back to Dashboard
-        </button>
+            <span className="text-2xl font-bold tracking-tight">
+              <span className="text-slate-900">Cafe</span>
+              <span className="text-orange-500">Flow</span>
+            </span>
+          </Link>
 
-        {/* Header */}
-        <div className="mb-10">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <p className="mb-2 text-sm font-semibold text-gray-500">
-                {cafe.name}
+          <div className="flex items-center gap-4">
+            <div className="hidden text-right sm:block">
+              <p className="text-sm font-semibold text-slate-800">
+                Cafe Owner
               </p>
 
-              <h1 className="text-3xl font-bold tracking-tight text-gray-900 sm:text-4xl">
-                QR Management
-              </h1>
-
-              <p className="mt-3 max-w-2xl text-sm leading-6 text-gray-500 sm:text-base">
-                Manage the QR codes customers use to give
-                feedback and access your future digital menu.
+              <p className="text-xs text-slate-500">
+                {user.email}
               </p>
             </div>
 
             <button
               type="button"
-              onClick={() =>
-                router.push("/dashboard/cafe")
-              }
-              className="rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm font-semibold text-gray-700 shadow-sm transition hover:bg-gray-50"
+              onClick={async () => {
+                await auth.signOut();
+                window.location.href = "/login";
+              }}
+              className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
             >
-              Cafe Settings
+              Logout
             </button>
           </div>
         </div>
+      </header>
 
-        {/* QR Cards */}
-        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+      <div className="mx-auto max-w-7xl px-6 py-10 lg:px-8">
+        {/* HERO */}
+        <section className="rounded-3xl bg-slate-950 p-8 text-white shadow-sm sm:p-10">
+          <div className="flex flex-col justify-between gap-8 lg:flex-row lg:items-center">
+            <div>
+              <p className="text-sm font-semibold text-orange-400">
+                CafeFlow Dashboard
+              </p>
 
-          {/* TABLE FEEDBACK */}
-          <QRCard
-            type="table"
-            title="Table Feedback QR"
-            description="Place this QR code on customer tables. Customers can scan it and directly submit feedback."
-            icon="🍽️"
-            url={customerUrl}
-            active={true}
-          />
+              <h1 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">
+                Good to see you again.
+              </h1>
 
-          {/* BILLING FEEDBACK */}
-          <QRCard
-            type="billing"
-            title="Billing Feedback QR"
-            description="Place this QR code near your billing counter or on the payment book for post-payment feedback."
-            icon="💳"
-            url={customerUrl}
-            active={true}
-          />
+              <p className="mt-3 max-w-2xl leading-7 text-slate-300">
+                Manage your customer feedback, ratings, QR code, and cafe
+                settings from one place.
+              </p>
 
-          {/* DIGITAL MENU */}
-          <QRCard
-            type="menu"
-            title="Digital Menu QR"
-            description="Customers will scan this QR to view your digital menu, categories, items, prices and availability."
-            icon="📋"
-            url={menuUrl}
-            active={false}
-          />
+              <div className="mt-6 inline-flex items-center rounded-full bg-white/10 px-4 py-2 text-sm font-semibold">
+                ☕ {cafe.name}
+              </div>
+            </div>
 
-        </div>
+            <Link
+              href={`/c/${cafe.id}`}
+              target="_blank"
+              className="inline-flex items-center justify-center rounded-xl bg-orange-500 px-6 py-3.5 font-semibold text-white transition hover:bg-orange-600"
+            >
+              Open Customer Page
+            </Link>
+          </div>
+        </section>
 
-        {/* How It Works */}
-        <section className="mt-10 rounded-3xl border border-gray-200 bg-white p-6 shadow-sm sm:p-8">
-          <h2 className="text-xl font-bold text-gray-900">
-            How CafeFlow QR works
+        {/* ERROR */}
+        {error && (
+          <div className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
+            {error}
+          </div>
+        )}
+
+        {/* QUICK ACTIONS */}
+        <section className="mt-8">
+          <h2 className="text-xl font-bold text-slate-950">
+            Quick actions
           </h2>
 
-          <div className="mt-6 grid gap-6 md:grid-cols-3">
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Link
+              href="/dashboard/feedback"
+              className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:border-orange-200 hover:shadow-md"
+            >
+              <div className="text-2xl">💬</div>
 
-            <div>
-              <div className="mb-3 text-3xl">
-                📱
-              </div>
-
-              <h3 className="font-semibold text-gray-900">
-                1. Customer scans
+              <h3 className="mt-4 font-bold text-slate-900">
+                Feedback
               </h3>
 
-              <p className="mt-2 text-sm leading-6 text-gray-500">
-                The customer scans the QR code using their
-                phone camera.
+              <p className="mt-1 text-sm leading-6 text-slate-500">
+                View customer feedback and ratings.
               </p>
-            </div>
+            </Link>
 
-            <div>
-              <div className="mb-3 text-3xl">
-                ⭐
-              </div>
+            <Link
+              href="/dashboard/qr"
+              className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:border-orange-200 hover:shadow-md"
+            >
+              <div className="text-2xl">▦</div>
 
-              <h3 className="font-semibold text-gray-900">
-                2. Customer responds
+              <h3 className="mt-4 font-bold text-slate-900">
+                QR Code
               </h3>
 
-              <p className="mt-2 text-sm leading-6 text-gray-500">
-                They submit their rating, category and feedback
-                through CafeFlow.
+              <p className="mt-1 text-sm leading-6 text-slate-500">
+                Download or print your cafe QR code.
               </p>
-            </div>
+            </Link>
 
-            <div>
-              <div className="mb-3 text-3xl">
-                📊
-              </div>
+            <Link
+              href="/dashboard/cafe"
+              className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:border-orange-200 hover:shadow-md"
+            >
+              <div className="text-2xl">⚙️</div>
 
-              <h3 className="font-semibold text-gray-900">
-                3. You see the feedback
+              <h3 className="mt-4 font-bold text-slate-900">
+                My Cafe
               </h3>
 
-              <p className="mt-2 text-sm leading-6 text-gray-500">
-                Feedback is stored in your CafeFlow dashboard
-                for analysis and improvement.
+              <p className="mt-1 text-sm leading-6 text-slate-500">
+                Update your cafe information.
               </p>
-            </div>
+            </Link>
 
+            <Link
+              href={`/c/${cafe.id}`}
+              target="_blank"
+              className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:border-orange-200 hover:shadow-md"
+            >
+              <div className="text-2xl">👀</div>
+
+              <h3 className="mt-4 font-bold text-slate-900">
+                Customer Page
+              </h3>
+
+              <p className="mt-1 text-sm leading-6 text-slate-500">
+                See what your customers see.
+              </p>
+            </Link>
           </div>
         </section>
 
-        {/* Future */}
-        <section className="mt-6 rounded-3xl border border-gray-200 bg-white p-6 shadow-sm sm:p-8">
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        {/* STATS */}
+        <section className="mt-8 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <p className="text-sm font-medium text-slate-500">
+              Total Feedback
+            </p>
 
+            <p className="mt-3 text-4xl font-bold text-slate-950">
+              {totalFeedback}
+            </p>
+
+            <p className="mt-2 text-sm text-slate-500">
+              Customer responses
+            </p>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <p className="text-sm font-medium text-slate-500">
+              Average Rating
+            </p>
+
+            <div className="mt-3 flex items-center gap-3">
+              <span className="text-4xl font-bold text-slate-950">
+                {averageRating.toFixed(1)}
+              </span>
+
+              <span className="text-2xl text-orange-400">
+                ★
+              </span>
+            </div>
+
+            <p className="mt-2 text-sm text-slate-500">
+              Based on customer feedback
+            </p>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <p className="text-sm font-medium text-slate-500">
+              Your Cafe
+            </p>
+
+            <p className="mt-3 truncate text-2xl font-bold text-slate-950">
+              {cafe.name}
+            </p>
+
+            <p className="mt-2 text-sm text-slate-500">
+              CafeFlow is connected
+            </p>
+          </div>
+        </section>
+
+        {/* RATING OVERVIEW */}
+        <section className="mt-8 rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+          <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-xl font-bold text-gray-900">
-                Coming next
+              <h2 className="text-xl font-bold text-slate-950">
+                Rating Overview
               </h2>
 
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-500">
-                The Digital Menu QR will become a full customer
-                menu with categories, items, prices, images and
-                availability.
+              <p className="mt-1 text-sm text-slate-500">
+                Customer rating distribution.
               </p>
             </div>
 
-            <div className="rounded-2xl bg-gray-50 px-5 py-4 text-center">
-              <p className="text-2xl font-bold text-gray-900">
-                3
-              </p>
+            <Link
+              href="/dashboard/feedback"
+              className="text-sm font-semibold text-orange-500 hover:text-orange-600"
+            >
+              View all →
+            </Link>
+          </div>
 
-              <p className="text-xs font-medium text-gray-500">
-                QR Types
-              </p>
-            </div>
+          <div className="mt-7 space-y-4">
+            {ratingCounts.map((item) => {
+              const percentage =
+                totalFeedback > 0
+                  ? (item.count / totalFeedback) * 100
+                  : 0;
 
+              return (
+                <div
+                  key={item.rating}
+                  className="flex items-center gap-4"
+                >
+                  <div className="flex w-12 items-center gap-1 text-sm font-semibold text-slate-700">
+                    {item.rating}
+                    <span className="text-orange-400">★</span>
+                  </div>
+
+                  <div className="h-3 flex-1 overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className="h-full rounded-full bg-orange-500 transition-all"
+                      style={{
+                        width: `${percentage}%`,
+                      }}
+                    />
+                  </div>
+
+                  <span className="w-8 text-right text-sm font-medium text-slate-500">
+                    {item.count}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </section>
 
+        {/* RECENT FEEDBACK */}
+        <section className="mt-8 rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-xl font-bold text-slate-950">
+                Recent Feedback
+              </h2>
+
+              <p className="mt-1 text-sm text-slate-500">
+                Latest customer responses.
+              </p>
+            </div>
+
+            <Link
+              href="/dashboard/feedback"
+              className="text-sm font-semibold text-orange-500 hover:text-orange-600"
+            >
+              View all →
+            </Link>
+          </div>
+
+          {feedback.length === 0 ? (
+            <div className="mt-7 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
+              <p className="font-semibold text-slate-700">
+                No feedback yet
+              </p>
+
+              <p className="mt-2 text-sm text-slate-500">
+                Share your QR code with customers to start collecting
+                feedback.
+              </p>
+            </div>
+          ) : (
+            <div className="mt-6 divide-y divide-slate-100">
+              {feedback.slice(0, 5).map((item) => (
+                <div
+                  key={item.id}
+                  className="py-5 first:pt-0 last:pb-0"
+                >
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex gap-1 text-orange-400">
+                      {[1, 2, 3, 4, 5].map((star) => (
+                        <span
+                          key={star}
+                          className={
+                            star <= item.rating
+                              ? "text-orange-400"
+                              : "text-slate-200"
+                          }
+                        >
+                          ★
+                        </span>
+                      ))}
+                    </div>
+
+                    <span className="text-xs text-slate-400">
+                      {item.createdAt
+                        ? new Date(
+                            item.createdAt.seconds * 1000
+                          ).toLocaleDateString()
+                        : "Recently"}
+                    </span>
+                  </div>
+
+                  <p className="mt-3 text-sm leading-6 text-slate-700">
+                    {item.message}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {/* CTA */}
+        <section className="mt-8 rounded-3xl border border-orange-100 bg-orange-50 p-8 sm:p-10">
+          <div className="flex flex-col justify-between gap-6 lg:flex-row lg:items-center">
+            <div>
+              <p className="text-sm font-semibold text-orange-600">
+                Grow your cafe
+              </p>
+
+              <h2 className="mt-2 text-2xl font-bold text-slate-950">
+                Put your CafeFlow QR where customers can see it.
+              </h2>
+
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+                Place it on tables, counters, bills, or takeaway packaging
+                and make feedback easy for your customers.
+              </p>
+            </div>
+
+            <Link
+              href="/dashboard/qr"
+              className="inline-flex shrink-0 items-center justify-center rounded-xl bg-orange-500 px-6 py-3.5 font-semibold text-white transition hover:bg-orange-600"
+            >
+              Get QR Code
+            </Link>
+          </div>
+        </section>
       </div>
+
+      {/* FOOTER */}
+      <footer className="mt-12 border-t border-slate-200 bg-white">
+        <div className="mx-auto flex max-w-7xl flex-col gap-3 px-6 py-8 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between lg:px-8">
+          <p>
+            © {new Date().getFullYear()} CafeFlow. All rights reserved.
+          </p>
+
+          <p>
+            Customer feedback made simple.
+          </p>
+        </div>
+      </footer>
     </main>
   );
 }
-
