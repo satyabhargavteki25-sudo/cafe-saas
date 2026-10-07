@@ -324,7 +324,7 @@ function QRCard({
   );
 }
 
-export default function QRPage(): ReactElement {
+export default function QRPage(): ReactElement | null {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [cafe, setCafe] = useState<Cafe | null>(null);
